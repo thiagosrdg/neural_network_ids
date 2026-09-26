@@ -1,0 +1,57 @@
+# pyproject.toml — the single configuration file for this Python project.
+# It plays the role of `pom.xml` (Maven) or `build.gradle` (Gradle) in Java:
+# it names the project, lists its dependencies, and configures the tools.
+
+[project]
+name = "neural-ids"
+version = "0.1.0"
+description = "Learning project: a neural network that flags suspicious network flows."
+readme = "README.md"
+authors = [
+    { name = "thiagosrdg", email = "thiagosrdg@gmail.com" }
+]
+# The exact interpreter version is pinned in `.python-version` (3.13).
+requires-python = ">=3.13"
+# Runtime dependencies: the code in src/neural_ids/ needs these to run.
+# - numpy: fast arrays; we build the neural networks with it from scratch.
+# - pandas: tables (one row per network flow).
+# - matplotlib: plots, such as loss curves saved to reports/figures/.
+# - scikit-learn: only for splitting data and for cross-checking our own code.
+dependencies = [
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "pandas>=3.0.6",
+    "scikit-learn>=1.9.1",
+]
+
+[dependency-groups]
+# Development tools: needed to work on the project, not to use it.
+# - pytest: runs the tests in tests/.
+# - ruff: finds code problems (lint) and formats code.
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.9",
+]
+
+[build-system]
+# The "build backend" turns src/neural_ids/ into an installable package.
+# uv_build is uv's own backend; it finds the package in src/ automatically.
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+# Maximum characters per line.
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+# Rule sets that ruff checks:
+# E = pycodestyle errors (style), F = pyflakes (unused names, undefined names),
+# I = isort (import order), B = bugbear (likely bugs), UP = pyupgrade (modern syntax),
+# NPY = NumPy-specific rules (for example, flags the legacy global np.random.seed).
+select = ["E", "F", "I", "B", "UP", "NPY"]
+
+[tool.pytest.ini_options]
+# Where pytest looks for tests, and "-ra" prints a short summary of skipped/failed tests.
+testpaths = ["tests"]
+addopts = "-ra"

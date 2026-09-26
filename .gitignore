@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+
+# Data and models (never commit)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+models/*
+!models/.gitkeep
+
+# Network captures anywhere (they can contain personal data)
+*.pcap
+*.pcapng
+*.cap
+*.pcap.gz
+*.pcapng.gz
+
+# Secrets and personal Claude Code files
+.env
+.env.*
+.claude/settings.local.json
+CLAUDE.local.md
+
+# OS and editors
+.DS_Store
+*.swp

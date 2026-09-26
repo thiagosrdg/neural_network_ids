@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "outputStyle": "Explanatory",
+  "env": {
+    "MPLBACKEND": "Agg"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(uv sync *)",
+      "Bash(uv run pytest *)",
+      "Bash(uv run ruff *)",
+      "Bash(uv run python -m neural_ids*)",
+      "Bash(uv run python explore/*)",
+      "Bash(uv run neural-ids *)",
+      "Bash(capinfos *)",
+      "Bash(sha256sum *)",
+      "Bash(git add *)"
+    ],
+    "ask": [
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(tshark *)",
+      "Bash(tcpdump *)",
+      "Bash(dumpcap *)"
+    ],
+    "deny": [
+      "Bash(sudo *)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./data/raw/**)",
+      "Edit(./data/raw/**)"
+    ]
+  }
+}
