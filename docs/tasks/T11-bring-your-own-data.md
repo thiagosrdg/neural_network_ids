@@ -49,8 +49,3 @@ capture never end up in both training and test data.
 ## Out of scope
 Labeling rules for mixed captures (time windows and IP addresses, as public datasets need):
 phase 2.
-
-## Learning check
-1. Why does a random split by flow give better-looking but dishonest numbers here?
-2. What does the manifest let another person verify, and what can it not prove?
-3. What happens to the autoencoder if a "normal" capture secretly contains an attack?

@@ -40,7 +40,7 @@ Then ask "OK to start?" and do not edit files until I answer.
 - Stop and tell me: what to implement, the file and function, the test that checks it, and the
   command to run it (`uv run pytest -q tests/<file>.py::<test>`).
 - While I work, follow the tutoring commands in `CLAUDE.md` (`done`, `hint`, `solution`,
-  `skip`, `quiz`).
+  `skip`).
 
 ## 4. Verify with evidence
 - Go through every acceptance criterion in the spec and mark each one pass or fail.
@@ -50,9 +50,7 @@ Then ask "OK to start?" and do not edit files until I answer.
   subagent to review the diff against the spec. Fix correctness problems in code you wrote.
   For problems in my code, explain them and let me fix them.
 
-## 5. Learning check, report, stop
-- Ask me the spec's "Learning check" questions one at a time and give short feedback on each
-  answer. I can type `skip quiz` to skip this step.
+## 5. Report and stop
 - Write `docs/reports/<ID>-<short-slug>.md` from `docs/reports/TEMPLATE.md`, in at most 60
   lines, with numbers copied from real output only.
 - In `docs/ROADMAP.md`, change the task's `- [ ]` to `- [x]` and add a link to the report.

@@ -55,10 +55,3 @@ real captures.
 
 ## Out of scope
 Reading real captures (T10), models.
-
-## Learning check
-1. Why must synthetic data, public datasets, and user captures all go through
-   `compute_flow_features`?
-2. From one flow alone, can you tell an SSH brute-force attempt from a normal failed login?
-   What extra information would help?
-3. Why does good performance on synthetic data prove nothing about real networks?

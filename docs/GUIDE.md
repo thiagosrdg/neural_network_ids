@@ -174,7 +174,7 @@ minutes, then File → Save As (pcapng format).
    type `/plan`).
 4. When Claude stops at your `TODO(human)` pieces, write the code in the editor. The tests tell
    you when you are done.
-5. At the end, answer the learning-check questions, review the report, and approve the commit.
+5. At the end, review the report and approve the commit.
 6. Paste the report into the Project chat. You get feedback and the next prompt.
 
 **Tutoring commands** (defined in `CLAUDE.md`):
@@ -185,7 +185,6 @@ minutes, then File → Save As (pcapng format).
 | `hint` | The next hint level: 1 = concept nudge, 2 = pseudocode, 3 = partial code with blanks. |
 | `solution` | The full solution for the current piece, explained line by line. |
 | `skip` | Claude writes the current piece (the report says so). |
-| `quiz` | Three short questions about the current concept, one at a time. |
 | `/check-my-code` | Tests, lint, and format check, plus a review of your code, with no edits. |
 | `/task-report` | Rewrites the report, for example if a conversation ended early. |
 
@@ -210,7 +209,7 @@ always-loaded instructions short, and load procedures and specs only when they a
 | `.claude/agents/ml-reviewer.md` | A subagent (a helper with its own clean context) that reviews diffs for leakage, contract violations, shortcut features, privacy problems, and invented numbers | When a task asks for a review |
 | `docs/ARCHITECTURE.md` | The design: components, flows, the two networks, training modes, design decisions, limitations. Also the portfolio's main technical document. | Read by `/start-task` when a task touches the design |
 | `docs/ROADMAP.md` | Plan, pipeline, and status checklist | Read by `/start-task` |
-| `docs/tasks/*.md` | One spec per task: goal, deliverables, your pieces, acceptance criteria, learning check | Read by `/start-task` |
+| `docs/tasks/*.md` | One spec per task: goal, deliverables, your pieces, acceptance criteria | Read by `/start-task` |
 | `docs/reports/` | `TEMPLATE.md`, plus one report per task | Written at the end of each task |
 | `.vscode/` | Editor settings and recommended extensions | Read by VS Code |
 

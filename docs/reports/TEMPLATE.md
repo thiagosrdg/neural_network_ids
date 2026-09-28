@@ -25,9 +25,6 @@
 ## Key concepts
 - <3–5 bullets, one line each>
 
-## Learning check
-- <question topic> — answered well | needs review: <what>
-
 ## Decisions and deviations from the spec
 - <decision and reason> | none
 

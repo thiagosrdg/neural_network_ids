@@ -38,9 +38,3 @@ and prove that the gradients are correct. The autoencoder in T07 reuses these bl
 
 ## Out of scope
 The training loop (T06).
-
-## Learning check
-1. For a batch of 32 and a layer 29 → 64 (29 features in contract v1), what are the shapes of
-   `x`, `W`, `grad_out`, and `dW`?
-2. Why does He initialization scale the weights by `sqrt(2 / fan_in)` for ReLU networks?
-3. What is the Big-O cost of one forward pass through the whole MLP?

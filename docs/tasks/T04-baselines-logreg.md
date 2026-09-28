@@ -42,8 +42,3 @@ logistic regression (one neuron with a sigmoid) trained with gradient descent. T
 
 ## Out of scope
 Hidden layers (T05).
-
-## Learning check
-1. Why does the gradient of cross-entropy with a sigmoid simplify to `(p − y)`?
-2. Why does the perceptron never settle when the data is not linearly separable?
-3. What is the Big-O cost of one training epoch in terms of `n` and `d`?

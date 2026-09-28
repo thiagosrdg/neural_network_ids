@@ -46,8 +46,3 @@ can train the model on their own traffic.
   with a clear message, not a stack trace.
 - No payload bytes and no unanonymized IP addresses appear in the outputs or the report.
 - All tests pass. Phase 1 is complete.
-
-## Learning check
-1. Why are the scores of a synthetically trained model meaningless on your real capture?
-2. What does a user need to collect to train the classifier, and what for the autoencoder?
-3. Which privacy risks remain even with `--anonymize`?

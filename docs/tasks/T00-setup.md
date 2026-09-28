@@ -40,8 +40,3 @@ code: plan → stub → I implement → verify → report → commit.
 
 ## Out of scope
 Captures, features, any ML code.
-
-## Learning check
-1. What does a virtual environment isolate you from? Compare it with Maven or Gradle in Java.
-2. Why commit `uv.lock` but not `.venv/`?
-3. Why is a local `np.random.Generator` safer than a global seed as the code grows?

@@ -43,8 +43,3 @@ reconstructs badly as anomalies.
 
 ## Out of scope
 PyTorch (T09).
-
-## Learning check
-1. Why does the middle layer have to be smaller than the input?
-2. Why choose the threshold from normal validation flows only?
-3. On your own home network, which normal events could look "unusual" to this model?

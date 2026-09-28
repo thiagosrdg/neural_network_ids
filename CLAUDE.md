@@ -32,16 +32,16 @@ Design: `docs/ARCHITECTURE.md`. Plan and status: `docs/ROADMAP.md`. One spec per
   scaffolding, leave a stub (signature, type hints, docstring with shapes, and
   `raise NotImplementedError("TODO(human): ...")`), then stop and tell me what to write.
   Never fill in a `TODO(human)` yourself unless I type `solution` or `skip`.
-- guided: you write all the code, then explain it part by part and ask me 2–3 check questions.
+- guided: you write all the code, then explain it part by part.
 - fast: you write all the code with short explanations.
 
 ## Tutoring commands (I type these)
+- Never quiz me or ask me learning-check questions; I focus on development.
 - `done` → run the tests for my piece, then review my code: explain each problem and why it
   matters, but do not fix it.
 - `hint` → give the next hint level: 1 = concept nudge, 2 = pseudocode, 3 = partial code with blanks.
 - `solution` → give the full solution for the current piece and explain it line by line.
 - `skip` → you implement the current piece; the report must say so.
-- `quiz` → ask me 3 short questions about the current concept, one at a time.
 
 ## Stack and commands
 - Python 3.13 managed by uv. Package code in `src/neural_ids/`, tests in `tests/`.

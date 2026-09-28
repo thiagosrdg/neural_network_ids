@@ -70,9 +70,3 @@ between any capture and any model.
 
 ## Out of scope
 Code that computes features (T02) or reads captures (T10).
-
-## Learning check
-1. Why is one bidirectional flow more useful than two one-way flows for detection?
-2. Why measure sizes at the IP layer and not the frame size? Think of Ethernet, Wi-Fi, and
-   `tcpdump -i any` captures.
-3. Should the exact destination port be a feature? What could the model learn by mistake?

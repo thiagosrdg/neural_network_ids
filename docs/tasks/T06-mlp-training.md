@@ -39,8 +39,3 @@ compare it with logistic regression on the synthetic data.
 
 ## Out of scope
 The autoencoder (T07), PyTorch (T08).
-
-## Learning check
-1. What does momentum do? Use a physical analogy.
-2. What does a learning rate that is 10 times too large look like on the loss curve?
-3. Why reshuffle the data every epoch?

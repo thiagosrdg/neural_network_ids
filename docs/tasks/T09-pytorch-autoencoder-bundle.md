@@ -39,8 +39,3 @@ this command at real data.
 
 ## Out of scope
 Reading captures (T10).
-
-## Learning check
-1. Why store the feature order and the schema version together with the weights?
-2. What problem does the checksum in `bundle.json` catch, and what attack can it not stop?
-3. Why does the autoencoder mode not need a label column?

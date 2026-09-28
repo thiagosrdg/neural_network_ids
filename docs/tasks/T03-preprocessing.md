@@ -46,9 +46,3 @@ easy to replace.
 
 ## Out of scope
 Models.
-
-## Learning check
-1. Explain the broadcasting in `(X - mean) / std` with the shapes `(n, d)` and `(d,)`.
-2. Why `log1p` for byte counts and rates? What does it do to a flow with 0 bytes and to one
-   with 10⁹ bytes?
-3. What is the time and memory complexity of fitting the standardizer?

@@ -42,8 +42,3 @@ with PyTorch's automatic differentiation (autograd).
 
 ## Out of scope
 The PyTorch autoencoder and the train command (T09).
-
-## Learning check
-1. What does `loss.backward()` compute, and where are the gradients stored?
-2. Why must you call `optimizer.zero_grad()` at every step?
-3. Why is macro-F1 more honest than accuracy when one attack class is rare?

@@ -59,8 +59,3 @@ the bridge from any person's capture to the networks.
 
 ## Out of scope
 Labeled datasets from folders of captures (T11), scoring (T12), host-window features (phase 2).
-
-## Learning check
-1. Why does the idle timeout matter more for UDP than for TCP?
-2. Where does a capture file record its link type, and why does the extractor need it?
-3. How much memory does the flow table use, and how do the timeouts keep it bounded?
