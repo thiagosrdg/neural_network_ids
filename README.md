@@ -45,3 +45,8 @@ uv run ruff check .
 
 See [docs/ROADMAP.md](docs/ROADMAP.md). The design is in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE). You may use, copy, and modify the code, as long as you keep the
+copyright notice.
