@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Learning project: a neural network that flags suspicious network flows."
 readme = "README.md"
 authors = [
-    { name = "thiagosrdg", email = "thiagosrdg@gmail.com" }
+    { name = "thiagosrdg" }
 ]
 # The exact interpreter version is pinned in `.python-version` (3.13).
 requires-python = ">=3.13"
