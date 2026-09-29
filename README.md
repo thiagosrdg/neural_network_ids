@@ -28,9 +28,11 @@ train it on traffic they capture with Wireshark or tcpdump (`.pcap` / `.pcapng`)
 
 ## Setup
 
-Requires [uv](https://docs.astral.sh/uv/). It installs Python 3.13 and all dependencies:
+Requires [uv](https://docs.astral.sh/uv/). Install Python 3.13 (some uv setups download
+Python only on request), then all dependencies:
 
 ```bash
+uv python install 3.13
 uv sync
 ```
 

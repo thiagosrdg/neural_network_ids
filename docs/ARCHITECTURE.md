@@ -55,6 +55,8 @@ conversation in both directions, keyed by the 5-tuple (source IP, destination IP
 destination port, protocol). "Forward" is the direction of the first packet. A TCP flow ends on
 RST, or after both FINs and the final ACK; any flow also ends after 120 s of silence or 1800 s
 in total.
+Non-IP packets and all IP fragments are skipped and counted in the extractor summary. The
+exact rules, edge cases, and schema version are in `docs/features.md` and `schema.py`.
 
 Each flow becomes 29 numbers (feature contract v1), all taken from packet headers and timing:
 protocol (one-hot), duration, packets and IP-layer bytes in each direction, packet-length
@@ -142,6 +144,8 @@ my-captures/
 ## Limitations
 - Per-flow features miss attacks spread over many flows, such as slow scans and distributed
   brute force. Host-window features are planned.
+- IP fragments are skipped (v1 does no reassembly), so deliberately fragmented traffic such as
+  `nmap -f` shows up only in the skipped-fragment count.
 - A model trained on one network often performs worse on another; evaluate on captures from a
   different network or day before trusting it.
 - Synthetic data only tests the code. Detection quality depends on the captures you train on.
