@@ -4,6 +4,8 @@ All data here is synthetic: these tests check that the code follows the contract
 class has the signature it was written to have, not that anything detects real attacks.
 """
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -18,7 +20,7 @@ from neural_ids.features import (
     compute_flow_features,
     effective_times,
 )
-from neural_ids.schema import ACTIVE_TIMEOUT_S, IDLE_TIMEOUT_S, validate_flows
+from neural_ids.schema import ACTIVE_TIMEOUT_S, IDLE_TIMEOUT_S, SCHEMA_VERSION, validate_flows
 from neural_ids.synthetic import (
     ATTACK_CLASSES,
     GENERATORS,
@@ -26,6 +28,8 @@ from neural_ids.synthetic import (
     TCP_HDR,
     main,
     make_dataset,
+    make_dataset_with_provenance,
+    perfect_model_scores,
 )
 from neural_ids.utils import set_seed
 
@@ -336,3 +340,79 @@ def test_timestamps_are_whole_microseconds(name: str) -> None:
     """pcap files store microseconds by default, so T10 would read the same times."""
     for p in generate(name, 0.5, n=20):
         np.testing.assert_array_equal(p.timestamps, np.round(p.timestamps, 6))
+
+
+# ---------- Short benign SSH vs brute force ----------
+
+
+def test_ssh_bruteforce_overlaps_short_ssh_sessions_at_difficulty_1() -> None:
+    """Short benign SSH flows land inside the brute-force region at difficulty 1 only.
+
+    Region: the central 90% of brute-force flows in (total packets, duration).
+    """
+
+    def share_inside(difficulty: float) -> float:
+        brute = features_of("ssh_bruteforce", difficulty, n=300)
+        session = features_of("ssh_session", difficulty, n=300)
+        packets = brute["fwd_packets"] + brute["bwd_packets"]
+        p_lo, p_hi = packets.quantile([0.05, 0.95])
+        d_lo, d_hi = brute["duration_s"].quantile([0.05, 0.95])
+        s_packets = session["fwd_packets"] + session["bwd_packets"]
+        inside = s_packets.between(p_lo, p_hi) & session["duration_s"].between(d_lo, d_hi)
+        return float(inside.mean())
+
+    assert share_inside(0.0) == 0.0
+    assert share_inside(1.0) > 0.05
+
+
+def test_short_ssh_mistyped_password_has_one_failed_attempt() -> None:
+    """At least one generated session carries the brute-force 'login failed' reply."""
+    failed = [
+        p
+        for p in generate("ssh_session", 1.0, n=200)
+        if ((p.direction == -1) & (p.ip_len == TCP_HDR + 36)).any() and len(p.ip_len) < 40
+    ]
+    assert failed
+
+
+# ---------- Provenance ----------
+
+
+def test_perfect_model_scores_by_hand() -> None:
+    # 10 true attacks; 1 labeled normal, 3 normals labeled attack.
+    # TP = 9; labeled attacks = 9 + 3 = 12 → recall 0.75; predicted 10 → precision 0.9.
+    assert perfect_model_scores(10, 1, 3) == {"attack_recall": 0.75, "attack_precision": 0.9}
+    assert perfect_model_scores(0, 0, 0) == {"attack_recall": None, "attack_precision": None}
+
+
+def test_provenance_matches_the_table() -> None:
+    df, prov = make_dataset_with_provenance(2000, difficulty=1.0, seed=11)
+    assert prov["n_flows"] == 2000 and prov["seed"] == 11
+    assert prov["label_noise"] == 0.05 and prov["schema_version"] == SCHEMA_VERSION
+    labeled = df["label"].value_counts()
+    for name, count in prov["class_counts_labeled"].items():
+        assert labeled.get(name, 0) == count
+    assert sum(prov["class_counts_true"].values()) == 2000
+    true_attacks = sum(prov["class_counts_true"][name] for name in ATTACK_CLASSES)
+    assert true_attacks == 400
+    net = prov["flipped_normal_to_attack"] - prov["flipped_attack_to_normal"]
+    assert int(df["is_attack"].sum()) == true_attacks + net
+    assert prov["flipped_normal_to_attack"] > 0 and prov["flipped_attack_to_normal"] > 0
+
+
+def test_no_label_noise_gives_perfect_scores() -> None:
+    _, prov = make_dataset_with_provenance(500, difficulty=0.0, seed=12)
+    assert prov["flipped_normal_to_attack"] == prov["flipped_attack_to_normal"] == 0
+    assert prov["perfect_model_vs_noisy_labels"] == {
+        "attack_recall": 1.0,
+        "attack_precision": 1.0,
+    }
+
+
+def test_command_writes_provenance_json(tmp_path, capsys) -> None:
+    out = tmp_path / "synthetic.csv"
+    main(["--n", "300", "--seed", "2", "--difficulty", "1", "--out", str(out)])
+    prov = json.loads(out.with_suffix(".json").read_text())
+    assert prov["n_flows"] == 300 and prov["difficulty"] == 1.0
+    assert set(prov["perfect_model_vs_noisy_labels"]) == {"attack_recall", "attack_precision"}
+    assert "attack_recall" in capsys.readouterr().out

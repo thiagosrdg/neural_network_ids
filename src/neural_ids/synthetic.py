@@ -21,9 +21,11 @@ realistic "hard" variants), never the computed features, so every row is a possi
 It also flips up to `LABEL_NOISE_AT_MAX` of the labels.
 
 Run: uv run python -m neural_ids.synthetic --n 20000 --seed 42
+→ data/processed/synthetic.csv, plus synthetic.json with how the table was made.
 """
 
 import argparse
+import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -41,7 +43,7 @@ from neural_ids.features import (
     FlowPackets,
     flow_record,
 )
-from neural_ids.schema import validate_flows
+from neural_ids.schema import SCHEMA_VERSION, validate_flows
 from neural_ids.utils import set_seed
 
 NORMAL_CLASSES: tuple[str, ...] = ("web", "dns", "ssh_session")
@@ -215,11 +217,19 @@ def ssh_session(
     command output instead. Gaps between keystrokes are log-normal (irregular, human) with
     occasional long pauses. With higher difficulty sessions can be as short as 3 keystrokes,
     which makes them look more like brute force.
+
+    Hard variant (probability 0.4 * difficulty): a short benign SSH connection (see
+    `_short_ssh`: a mistyped password, `git fetch`, or a small `scp`), which looks like one
+    brute-force connection when seen as a single flow.
     """
     rtt = float(rng.uniform(0.01, 0.15))
     b = _Builder()
     _tcp_open(b, rtt)
     _ssh_setup(b, rtt, rng, jitter=1.0)
+    if rng.random() < 0.4 * difficulty:
+        _short_ssh(b, rtt, rng)
+        _tcp_close(b, rtt, closer=1)
+        return b.build(t0, PROTO_TCP, 22)
 
     m = int(rng.integers(round(_lerp(30, 3, difficulty)), 400))  # keystrokes
     typing = rng.lognormal(np.log(0.25), 1.0, m)  # typing: (m,) seconds
@@ -236,6 +246,40 @@ def ssh_session(
     b.add(gaps, np.tile([1, -1], m), sizes, PSH | ACK)
     _tcp_close(b, rtt, closer=1)
     return b.build(t0, PROTO_TCP, 22)
+
+
+def _short_ssh(b: _Builder, rtt: float, rng: np.random.Generator) -> None:
+    """The rest of a short benign SSH connection, after the key exchange (before the close).
+
+    - mistyped password: one failed attempt, the same packets and server delay as one
+      brute-force attempt, then a correct password and a few keystrokes;
+    - `git fetch`: key login, one request, a burst of response segments;
+    - small `scp` upload: key login, a burst of data segments, one reply.
+
+    Seen as one flow, a mistyped password and a brute-force connection look almost the same;
+    only the number of attempts over many flows (host-window features) separates them.
+    """
+    kind = rng.choice(["mistyped_password", "git_fetch", "scp_upload"])
+    password = TCP_HDR + 84 + int(rng.integers(0, 80))
+    if kind == "mistyped_password":
+        # Human typing time, then the server's failure delay (as in `ssh_bruteforce`).
+        b.add([rng.uniform(1.0, 8.0), rng.uniform(0.5, 2.5)], [1, -1], [password, TCP_HDR + 36])
+        login = (rng.uniform(1.0, 8.0), password)  # retyped password
+    else:
+        login = (0.005, TCP_HDR + int(rng.integers(300, 500)))  # public key, no typing
+    b.add([login[0], rtt], [1, -1], [login[1], TCP_HDR + 20], PSH | ACK)  # auth success
+    b.add([0.002, rtt], [1, -1], [TCP_HDR + 100, TCP_HDR + 60], PSH | ACK)  # open channel
+
+    if kind == "mistyped_password":
+        m = int(rng.integers(0, 8))  # a few keystrokes, each echoed (0: logged in, then left)
+        gaps = np.stack([rng.lognormal(np.log(0.25), 1.0, m), np.full(m, rtt)], axis=1).ravel()
+        b.add(gaps, np.tile([1, -1], m), TCP_HDR + 36, PSH | ACK)
+    else:
+        k = int(rng.integers(1, 20))  # data segments
+        data_dir = -1 if kind == "git_fetch" else 1
+        b.add(0.002, -data_dir, TCP_HDR + int(rng.integers(100, 400)), PSH | ACK)  # request
+        b.add(rng.exponential(0.001, k), data_dir, TCP_HDR + MSS, ACK)  # the data burst
+        b.add(rtt, -data_dir, TCP_HDR + 36, PSH | ACK)  # exit status / acknowledgment
 
 
 # ---------- Attacks ----------
@@ -285,6 +329,12 @@ def ssh_bruteforce(
     password packet and the server's "failed" reply after its fixed delay. After the last
     allowed attempt the server closes the connection. Machine timing: at difficulty 0 the
     gaps vary by 1%; at difficulty 1 by 40%, and packet sizes vary too.
+
+    Low-and-slow at higher difficulty: as few as 1 attempt per connection, and the tool
+    waits up to 5 s before each attempt (for example hydra's `-c`), which stays under
+    per-connection limits such as sshd's MaxAuthTries. One such flow looks like a person who
+    mistyped a password once (`ssh_session`); only host-window features, which count attempts
+    over many flows, can tell them apart.
     """
     rtt = float(rng.uniform(0.005, 0.1))
     jitter = _lerp(0.01, 0.4, difficulty)
@@ -292,10 +342,11 @@ def ssh_bruteforce(
     _tcp_open(b, rtt)
     _ssh_setup(b, rtt, rng, jitter=difficulty)
 
-    k = int(rng.integers(3, 7))  # attempts
+    k = int(rng.integers(round(_lerp(3, 1, difficulty)), 7))  # attempts in this connection
     delay = float(rng.uniform(0.5, 2.5))  # server's failure delay, fixed per connection
     reply_gaps = np.maximum(delay * (1.0 + jitter * rng.standard_normal(k)), 0.01)
-    send_gaps = np.maximum(0.002 * (1.0 + jitter * rng.standard_normal(k)), 0.0)
+    wait = _lerp(0.002, float(rng.uniform(0.2, 5.0)), difficulty)  # tool's wait per attempt
+    send_gaps = np.maximum(wait * (1.0 + jitter * rng.standard_normal(k)), 0.0)
     extra = rng.integers(0, int(80 * difficulty) + 1, k)  # extra: (k,) password length change
     gaps = np.stack([send_gaps, reply_gaps], axis=1).ravel()  # (2k,)
     sizes = np.stack([TCP_HDR + 84 + extra, np.full(k, TCP_HDR + 36)], axis=1).ravel()
@@ -349,7 +400,19 @@ def make_dataset(
     seed: int = 42,
     label_noise: float | None = None,
 ) -> pd.DataFrame:
-    """A synthetic flows table that follows the contract.
+    """A synthetic flows table that follows the contract (see `make_dataset_with_provenance`)."""
+    df, _ = make_dataset_with_provenance(n_flows, attack_fraction, difficulty, seed, label_noise)
+    return df
+
+
+def make_dataset_with_provenance(
+    n_flows: int,
+    attack_fraction: float = 0.2,
+    difficulty: float = 0.5,
+    seed: int = 42,
+    label_noise: float | None = None,
+) -> tuple[pd.DataFrame, dict]:
+    """A synthetic flows table that follows the contract, and how it was made.
 
     Args:
         n_flows: number of rows (flows), >= 1.
@@ -362,8 +425,11 @@ def make_dataset(
             example in plots); the flows are the same for any value.
 
     Returns:
-        (n_flows, 39) DataFrame: 8 metadata columns, 29 features, `label` (class name), and
-        `is_attack` (0 or 1). Rows are in random order. `validate_flows` passes.
+        df: (n_flows, 39) DataFrame: 8 metadata columns, 29 features, `label` (class name),
+            and `is_attack` (0 or 1). Rows are in random order. `validate_flows` passes.
+        provenance: JSON-ready dict (see `_provenance`): the arguments, SCHEMA_VERSION, class
+            counts before and after label noise, flips in each direction, and the scores a
+            perfect model would get against the noisy labels.
 
     Complexity: O(total packets) time; one Python call per flow (flows have different
     lengths, so they cannot share one array), vectorized inside each flow.
@@ -389,7 +455,57 @@ def make_dataset(
     df = pd.DataFrame(rows)
     df["label"], df["is_attack"] = _noisy_labels(classes, label_noise, rng)
     validate_flows(df)
-    return df
+    args = {
+        "n_flows": n_flows,
+        "seed": seed,
+        "attack_fraction": attack_fraction,
+        "difficulty": difficulty,
+        "label_noise": label_noise,
+    }
+    return df, _provenance(args, classes, df["label"].to_numpy())
+
+
+def _provenance(args: dict, classes: np.ndarray, labels: np.ndarray) -> dict:
+    """How a synthetic table was made, from the true classes and the (noisy) labels.
+
+    Input: classes and labels, both (n,) class names. O(n) time.
+    """
+    true_attack = np.isin(classes, ATTACK_CLASSES)  # (n,) bool
+    labeled_attack = np.isin(labels, ATTACK_CLASSES)  # (n,) bool
+    names = NORMAL_CLASSES + ATTACK_CLASSES
+    n_normal_to_attack = int((~true_attack & labeled_attack).sum())
+    n_attack_to_normal = int((true_attack & ~labeled_attack).sum())
+    return {
+        "data": "SYNTHETIC (tests code, not detection)",
+        **args,
+        "schema_version": SCHEMA_VERSION,
+        "class_counts_true": {name: int((classes == name).sum()) for name in names},
+        "class_counts_labeled": {name: int((labels == name).sum()) for name in names},
+        "flipped_normal_to_attack": n_normal_to_attack,
+        "flipped_attack_to_normal": n_attack_to_normal,
+        "perfect_model_vs_noisy_labels": perfect_model_scores(
+            int(true_attack.sum()), n_attack_to_normal, n_normal_to_attack
+        ),
+    }
+
+
+def perfect_model_scores(
+    n_true_attack: int, n_attack_to_normal: int, n_normal_to_attack: int
+) -> dict[str, float | None]:
+    """Attack recall and precision of a model that always predicts the TRUE class.
+
+    Scored against the noisy labels, even a perfect model loses points:
+    - true positives = true attacks still labeled attack = A - a2n
+    - recall = TP / labeled attacks = (A - a2n) / (A - a2n + n2a)
+    - precision = TP / predicted attacks = (A - a2n) / A
+    A value is None when its denominator is 0. O(1).
+    """
+    tp = n_true_attack - n_attack_to_normal
+    labeled = tp + n_normal_to_attack
+    return {
+        "attack_recall": tp / labeled if labeled else None,
+        "attack_precision": tp / n_true_attack if n_true_attack else None,
+    }
 
 
 def _spread(names: tuple[str, ...], count: int) -> np.ndarray:
@@ -453,17 +569,29 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--out", type=Path, default=Path("data/processed/synthetic.csv"))
     args = parser.parse_args(argv)
 
-    df = make_dataset(args.n, args.attack_fraction, args.difficulty, args.seed)
+    df, prov = make_dataset_with_provenance(
+        args.n, args.attack_fraction, args.difficulty, args.seed
+    )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(args.out, index=False)
+    json_path = args.out.with_suffix(".json")
+    json_path.write_text(json.dumps(prov, indent=2) + "\n")
 
     print(f"SYNTHETIC flows (they test code, not detection): {len(df)} rows -> {args.out}")
-    print(f"difficulty={args.difficulty} seed={args.seed} (labels after noise)")
-    counts = df["label"].value_counts()
+    print(f"provenance -> {json_path}")
+    print(f"difficulty={args.difficulty} seed={args.seed} label_noise={prov['label_noise']:g}")
+    print(f"  {'class':<15} {'group':<7} {'true':>7} {'labeled':>8}")
     for name in NORMAL_CLASSES + ATTACK_CLASSES:
         group = "attack" if name in ATTACK_CLASSES else "normal"
-        print(f"  {name:<15} {group:<7} {int(counts.get(name, 0)):>7}")
-    print(f"  {'is_attack=1':<23} {int(df['is_attack'].sum()):>7}")
+        true, labeled = prov["class_counts_true"][name], prov["class_counts_labeled"][name]
+        print(f"  {name:<15} {group:<7} {true:>7} {labeled:>8}")
+    print(f"  flipped normal -> attack: {prov['flipped_normal_to_attack']}")
+    print(f"  flipped attack -> normal: {prov['flipped_attack_to_normal']}")
+    scores = prov["perfect_model_vs_noisy_labels"]
+    print("A perfect model (always the true class), scored against the noisy labels:")
+    for key in ("attack_recall", "attack_precision"):
+        value = scores[key]
+        print(f"  {key:<17} {'n/a' if value is None else f'{value:.4f}'}")
 
 
 if __name__ == "__main__":

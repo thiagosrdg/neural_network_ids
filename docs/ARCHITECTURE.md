@@ -149,7 +149,9 @@ my-captures/
 
 ## Limitations
 - Per-flow features miss attacks spread over many flows, such as slow scans and distributed
-  brute force. Host-window features are planned.
+  brute force. Host-window features are planned. One low-and-slow brute-force connection
+  (one failed login) looks almost the same as a person who mistyped a password once; the
+  synthetic data reproduces this overlap at high difficulty.
 - IP fragments are skipped (v1 does no reassembly), so deliberately fragmented traffic such as
   `nmap -f` shows up only in the skipped-fragment count.
 - A model trained on one network often performs worse on another; evaluate on captures from a
