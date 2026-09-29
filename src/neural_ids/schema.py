@@ -51,8 +51,8 @@ class FeatureSpec:
     """One model input: its column name, dtype, and allowed closed range [min, max].
 
     `dtype` "int64" means the column must have an integer dtype. "float64" accepts any integer
-    or float dtype, because a CSV column of whole numbers (for example all zeros) is read back
-    as int64 by pandas.
+    or float dtype, because a CSV written by another tool or by hand can store whole numbers
+    without a decimal point (for example `0`), and pandas then reads that column as int64.
     """
 
     name: str

@@ -1,0 +1,338 @@
+"""Tests for `neural_ids.synthetic`: generators, `make_dataset`, and the command.
+
+All data here is synthetic: these tests check that the code follows the contract and that each
+class has the signature it was written to have, not that anything detects real attacks.
+"""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from neural_ids.features import (
+    ACK,
+    FIN,
+    PROTO_TCP,
+    RST,
+    SYN,
+    FlowPackets,
+    compute_flow_features,
+    effective_times,
+)
+from neural_ids.schema import ACTIVE_TIMEOUT_S, IDLE_TIMEOUT_S, validate_flows
+from neural_ids.synthetic import (
+    ATTACK_CLASSES,
+    GENERATORS,
+    NORMAL_CLASSES,
+    TCP_HDR,
+    main,
+    make_dataset,
+)
+from neural_ids.utils import set_seed
+
+DIFFICULTIES = (0.0, 0.5, 1.0)
+
+
+def generate(name: str, difficulty: float, n: int = 60, seed: int = 0) -> list[FlowPackets]:
+    rng = set_seed(seed)
+    return [GENERATORS[name](rng, difficulty) for _ in range(n)]
+
+
+def contract_end_index(p: FlowPackets) -> int:
+    """Index of the packet after which the contract ends this flow (or n - 1 if none does).
+
+    A plain re-implementation of the flow-end rules in `docs/features.md`, section 2, so the
+    test does not reuse generator code: idle timeout, active timeout (the flow ends BEFORE
+    packet i, so the end is i - 1), RST, and the final ACK after the closing FIN.
+    """
+    t_first = t_last = float(p.timestamps[0])
+    first_fin_dir = closing_fin_dir = None
+    for i in range(len(p.timestamps)):
+        t = float(p.timestamps[i])
+        if i > 0 and (t - t_last > IDLE_TIMEOUT_S or t - t_first > ACTIVE_TIMEOUT_S):
+            return i - 1
+        t_last = max(t, t_last)
+        flags, d = int(p.tcp_flags[i]), int(p.direction[i])
+        if p.protocol != PROTO_TCP:
+            continue
+        if flags & RST:
+            return i
+        if closing_fin_dir is not None and d != closing_fin_dir and flags & ACK:
+            return i  # the final ACK
+        if flags & FIN:
+            if first_fin_dir is None:
+                first_fin_dir = d
+            elif d != first_fin_dir and closing_fin_dir is None:
+                closing_fin_dir = d  # the closing FIN (never the final ACK itself)
+    return len(p.timestamps) - 1
+
+
+# ---------- Every generated flow follows the contract ----------
+
+
+@pytest.mark.parametrize("difficulty", DIFFICULTIES)
+@pytest.mark.parametrize("name", NORMAL_CLASSES + ATTACK_CLASSES)
+def test_generated_flows_pass_validate_flows(name: str, difficulty: float) -> None:
+    rows = [compute_flow_features(p) for p in generate(name, difficulty)]
+    df = pd.DataFrame(rows)
+    meta = {
+        "flow_id": [str(i) for i in range(len(df))],
+        "src_ip": "192.0.2.1",
+        "dst_ip": "198.51.100.1",
+        "src_port": 50000,
+        "dst_port": 0,
+        "protocol": 6,
+        "start_time": 0.0,
+        "end_time": 0.0,
+    }
+    validate_flows(pd.concat([pd.DataFrame(meta), df], axis=1))
+
+
+@pytest.mark.parametrize("difficulty", DIFFICULTIES)
+@pytest.mark.parametrize("name", NORMAL_CLASSES + ATTACK_CLASSES)
+def test_generated_packets_stay_inside_contract_limits(name: str, difficulty: float) -> None:
+    for p in generate(name, difficulty):
+        t = effective_times(p.timestamps)
+        assert (np.diff(t) <= 110.0 + 1e-6).all()  # generator margin under the 120 s timeout
+        assert t[-1] - t[0] <= 1700.0 + 1e-6
+        assert ((p.ip_len >= 20) & (p.ip_len <= 1500)).all()
+        if p.protocol != PROTO_TCP:
+            assert (p.tcp_flags == 0).all()
+
+
+@pytest.mark.parametrize("difficulty", DIFFICULTIES)
+@pytest.mark.parametrize("name", NORMAL_CLASSES + ATTACK_CLASSES)
+def test_last_packet_is_the_contract_end(name: str, difficulty: float) -> None:
+    """Nothing comes after the packet that ends the flow (RST or final ACK).
+
+    TCP flows must END with that packet; the one exception is an unanswered probe (a filtered
+    port: one SYN, no reply), which ends by idle timeout.
+    """
+    for p in generate(name, difficulty):
+        n = len(p.timestamps)
+        assert contract_end_index(p) == n - 1
+        if p.protocol == PROTO_TCP:
+            last = int(p.tcp_flags[-1])
+            unanswered_probe = n == 1 and last == SYN
+            closed = bool(last & RST) or last == ACK
+            assert closed or unanswered_probe, f"{name}: last flags {last:#04x}"
+
+
+def test_contract_end_checker_catches_packets_after_rst() -> None:
+    """Guards the test helper: a packet after an RST must be reported."""
+    p = FlowPackets(
+        timestamps=np.array([0.0, 0.1, 0.2]),
+        direction=np.array([1, -1, 1]),
+        ip_len=np.array([44, 40, 40]),
+        tcp_flags=np.array([SYN, RST | ACK, ACK]),
+        protocol=PROTO_TCP,
+        dst_port=80,
+    )
+    assert contract_end_index(p) == 1
+
+
+def tcp_flow(direction: list[int], flags: list[int]) -> FlowPackets:
+    n = len(flags)
+    return FlowPackets(
+        timestamps=np.arange(n) * 0.1,
+        direction=np.array(direction),
+        ip_len=np.full(n, 52),
+        tcp_flags=np.array(flags),
+        protocol=PROTO_TCP,
+        dst_port=80,
+    )
+
+
+def test_contract_end_checker_catches_packets_after_final_ack() -> None:
+    # SYN, SYN+ACK, ACK, FIN+ACK (fwd), FIN+ACK (bwd, closing FIN), ACK (fwd, final), ACK.
+    p = tcp_flow(
+        [1, -1, 1, 1, -1, 1, -1],
+        [SYN, SYN | ACK, ACK, FIN | ACK, FIN | ACK, ACK, ACK],
+    )
+    assert contract_end_index(p) == 5
+
+
+def test_contract_end_checker_closing_fin_is_never_the_final_ack() -> None:
+    # The closing FIN+ACK carries ACK but must not end the flow; the next ACK does.
+    p = tcp_flow([1, -1, 1], [FIN | ACK, FIN | ACK, ACK])
+    assert contract_end_index(p) == 2
+
+
+def test_contract_end_checker_ignores_retransmitted_fin() -> None:
+    # FIN (fwd), retransmitted FIN (fwd, not the closing FIN), ACK (bwd): no closing FIN yet,
+    # so nothing ends the flow; then FIN+ACK (bwd, closing FIN) and ACK (fwd, final).
+    p = tcp_flow([1, 1, -1, -1, 1], [FIN | ACK, FIN | ACK, ACK, FIN | ACK, ACK])
+    assert contract_end_index(p) == 4
+
+
+# ---------- Class signatures (difficulty 0) ----------
+
+
+def features_of(name: str, difficulty: float = 0.0, n: int = 200) -> pd.DataFrame:
+    return pd.DataFrame([compute_flow_features(p) for p in generate(name, difficulty, n)])
+
+
+def test_syn_scan_is_tiny_and_short() -> None:
+    f = features_of("syn_scan")
+    assert (f["fwd_packets"] + f["bwd_packets"] <= 3).all()
+    assert (f["duration_s"] < 0.25).all()
+    assert (f["pkt_len_max"] <= 44).all()  # header-only packets, no data
+    assert (f["syn_count"] >= 1).all() and (f["fin_count"] == 0).all()
+    assert (f["psh_count"] == 0).all()
+    # Open (SYN+ACK then RST), closed (RST+ACK), and filtered (no reply) all occur.
+    assert (f["syn_count"] == 2).any()
+    assert ((f["syn_count"] == 1) & (f["rst_count"] == 1)).any()
+    assert (f["bwd_packets"] == 0).any()
+
+
+def test_syn_scan_one_port_per_flow() -> None:
+    for p in generate("syn_scan", 1.0):
+        assert (p.tcp_flags & SYN).astype(bool)[p.direction == 1].sum() == 1
+
+
+def test_udp_flood_is_one_sided_and_fast() -> None:
+    f = features_of("udp_flood")
+    assert (f["bwd_packets"] == 0).all() and (f["proto_udp"] == 1).all()
+    assert (f["fwd_packets"] >= 300).all()
+    assert (f["packets_per_s"] >= 500).all()
+    assert (f["pkt_len_std"] == 0).all()  # identical packets at difficulty 0
+
+
+def test_ssh_bruteforce_attempts_are_regular_and_short() -> None:
+    f = features_of("ssh_bruteforce")
+    assert (f["duration_s"] < 30).all()
+    for p in generate("ssh_bruteforce", 0.0):
+        t = effective_times(p.timestamps)
+        replies = (p.direction == -1) & (p.ip_len == TCP_HDR + 36)  # "login failed" packets
+        gaps = (t[1:] - t[:-1])[replies[1:]]  # gaps: (k,) server delay per attempt
+        assert gaps.std() / gaps.mean() < 0.05  # machine timing
+
+
+def test_ssh_session_is_long_and_irregular() -> None:
+    f = features_of("ssh_session")
+    brute = features_of("ssh_bruteforce")
+    assert f["duration_s"].median() > 10 * brute["duration_s"].median()
+    assert (f["iat_std_s"] > f["iat_mean_s"]).mean() > 0.9  # human typing: high variation
+
+
+def test_web_completes_handshake_and_close() -> None:
+    f = features_of("web")
+    assert (f["syn_count"] == 2).all() and (f["fin_count"] == 2).all()
+    assert (f["rst_count"] == 0).all()
+    assert f["bwd_fwd_bytes_ratio"].median() > 1  # responses are larger than requests
+
+
+def test_dns_is_one_query_one_answer() -> None:
+    f = features_of("dns")
+    assert (f["fwd_packets"] == 1).all() and (f["bwd_packets"] == 1).all()
+    assert (f["proto_udp"] == 1).all() and (f["dst_port_class_well_known"] == 1).all()
+
+
+def test_difficulty_creates_hard_variants() -> None:
+    """At difficulty 1, some normal flows look like attacks (closed port, unanswered query)."""
+    web = features_of("web", 1.0)
+    assert ((web["rst_count"] == 1) & (web["bwd_packets"] == 1)).any()  # like a closed probe
+    dns = features_of("dns", 1.0)
+    assert (dns["bwd_packets"] == 0).any()  # like a tiny UDP flood
+
+
+def test_high_ports_are_not_an_attack_shortcut_at_difficulty_1() -> None:
+    """Benign flows seen mid-connection point at the client's ephemeral port."""
+    df = make_dataset(3000, difficulty=1.0, seed=9, label_noise=0.0)
+    normal = df[df["is_attack"] == 0]
+    assert normal["dst_port_class_dynamic"].mean() > 0.01
+    assert ((normal["proto_udp"] == 1) & (normal["dst_port_class_well_known"] == 0)).any()
+
+
+def test_label_noise_zero_keeps_true_classes_and_same_flows() -> None:
+    noisy = make_dataset(1000, difficulty=1.0, seed=10)
+    clean = make_dataset(1000, difficulty=1.0, seed=10, label_noise=0.0)
+    labels = ["label", "is_attack"]
+    pd.testing.assert_frame_equal(noisy.drop(columns=labels), clean.drop(columns=labels))
+    assert (noisy["label"] != clean["label"]).any()
+
+
+# ---------- make_dataset ----------
+
+
+def test_make_dataset_follows_contract_and_counts() -> None:
+    df = make_dataset(1000, attack_fraction=0.3, difficulty=0.0, seed=1)
+    validate_flows(df)
+    assert len(df) == 1000
+    assert int(df["is_attack"].sum()) == 300  # no label noise at difficulty 0
+    counts = df["label"].value_counts()
+    for name in ATTACK_CLASSES:
+        assert counts[name] == 100
+    for name in NORMAL_CLASSES:
+        assert abs(counts[name] - 700 / 3) < 1
+
+
+def test_label_and_is_attack_agree() -> None:
+    df = make_dataset(2000, difficulty=1.0, seed=2)
+    assert (df["is_attack"] == df["label"].isin(ATTACK_CLASSES).astype(int)).all()
+
+
+def test_label_noise_grows_with_difficulty() -> None:
+    """At difficulty 1 about 5% of labels are flipped; compare with the true classes."""
+    clean = make_dataset(4000, difficulty=0.0, seed=3)
+    assert clean["label"].isin(NORMAL_CLASSES + ATTACK_CLASSES).all()
+    noisy = make_dataset(4000, difficulty=1.0, seed=3)
+    # Flipped rows: a syn_scan signature (<= 3 header-only packets, SYN) labeled as normal.
+    probe_like = (noisy["syn_count"] >= 1) & (noisy["pkt_len_max"] <= 44)
+    assert (noisy.loc[probe_like, "is_attack"] == 0).any()
+    share = 1 - (noisy.loc[probe_like, "is_attack"] == 1).mean()
+    assert 0.01 < share < 0.12
+
+
+def test_same_seed_same_data_and_different_seed_different_data() -> None:
+    a = make_dataset(300, seed=7)
+    pd.testing.assert_frame_equal(a, make_dataset(300, seed=7))
+    assert not a.equals(make_dataset(300, seed=8))
+
+
+def test_metadata_times_match_duration() -> None:
+    df = make_dataset(500, seed=4)
+    assert (df["duration_s"] == df["end_time"] - df["start_time"]).all()
+
+
+def test_addresses_come_from_documentation_ranges() -> None:
+    df = make_dataset(300, seed=5)
+    ranges = ("192.0.2.", "198.51.100.", "203.0.113.")
+    for col in ("src_ip", "dst_ip"):
+        assert df[col].map(lambda ip: ip.startswith(ranges)).all()
+
+
+def test_csv_round_trip_still_validates(tmp_path) -> None:
+    path = tmp_path / "flows.csv"
+    make_dataset(300, seed=6).to_csv(path, index=False)
+    validate_flows(pd.read_csv(path))
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"n_flows": 0},
+        {"attack_fraction": 1.5},
+        {"difficulty": -0.1},
+        {"difficulty": 2.0},
+        {"label_noise": 1.5},
+    ],
+)
+def test_make_dataset_rejects_bad_arguments(kwargs: dict) -> None:
+    args = {"n_flows": 10} | kwargs
+    with pytest.raises(ValueError):
+        make_dataset(**args)
+
+
+def test_command_writes_csv_and_prints_counts(tmp_path, capsys) -> None:
+    out = tmp_path / "synthetic.csv"
+    main(["--n", "200", "--seed", "1", "--out", str(out)])
+    printed = capsys.readouterr().out
+    assert "SYNTHETIC" in printed and "syn_scan" in printed
+    validate_flows(pd.read_csv(out))
+
+
+@pytest.mark.parametrize("name", NORMAL_CLASSES + ATTACK_CLASSES)
+def test_timestamps_are_whole_microseconds(name: str) -> None:
+    """pcap files store microseconds by default, so T10 would read the same times."""
+    for p in generate(name, 0.5, n=20):
+        np.testing.assert_array_equal(p.timestamps, np.round(p.timestamps, 6))

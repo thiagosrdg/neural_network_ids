@@ -58,6 +58,12 @@ in total.
 Non-IP packets and all IP fragments are skipped and counted in the extractor summary. The
 exact rules, edge cases, and schema version are in `docs/features.md` and `schema.py`.
 
+The extractor (T10) and the synthetic generator (T02) both hand one flow to
+`compute_flow_features` as `FlowPackets`: aligned arrays of timestamps, directions, IP lengths,
+and TCP flag bytes (header bit values, FIN 0x01 … URG 0x20), in processing (file) order and
+never sorted. `compute_flow_features` applies the effective-time rule `t_eff = max(t, t_last)`
+itself, so every data source shares one implementation of it.
+
 Each flow becomes 29 numbers (feature contract v1), all taken from packet headers and timing:
 protocol (one-hot), duration, packets and IP-layer bytes in each direction, packet-length
 statistics, time between packets, TCP flag counts, rates, the backward/forward byte ratio, and
@@ -130,7 +136,7 @@ my-captures/
 | One feature function for every data source | Features computed differently in training and in use break models with no error message (training–serving skew). |
 | No identifiers as inputs | Models learn shortcuts such as "this IP was the attacker"; a study of CIC-IDS2017 found exactly this with IP addresses and timestamps. |
 | Packet sizes at the IP layer | Link layers differ between Ethernet, Wi-Fi, and `tcpdump -i any` captures. |
-| Correct TCP termination (RST, both FINs + final ACK) | CICFlowMeter ended flows at the first FIN, which created fake flows ("TCP appendices") in 25.9% of CIC-IDS2017. |
+| Correct TCP termination (RST, both FINs + final ACK) | CICFlowMeter ended flows at the first FIN, so the rest of each connection became extra fake flows ("TCP appendices"): 25.9% of all flows in CIC-IDS2017 (Engelen, Rimmer, Joosen, WTMC 2021). |
 | Split by capture | Honest results on correlated data. |
 | Model bundle = `state_dict` + JSON (schema version, feature order, preprocessor, threshold, checksum) | No pickle; wrong or corrupted files fail loudly. |
 | Streaming reader behind a small interface | Constant memory, and a faster backend (for example dpkt) can replace Scapy for large public datasets. |
@@ -161,3 +167,6 @@ my-captures/
 ## References
 - G. Engelen, V. Rimmer, W. Joosen, "Troubleshooting an Intrusion Detection Dataset: the
   CICIDS2017 Case Study," WTMC 2021.
+  https://intrusion-detection.distrinet-research.be/WTMC2021/ —
+  "TCP appendices are alarmingly present,
+  making up 25.9 percent of the entire dataset".

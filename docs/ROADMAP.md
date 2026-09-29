@@ -42,7 +42,7 @@ Legend: `- [ ]` not started · `- [x]` done (with a link to the report)
 ### Phase 1 — Build
 - [x] T00 — Project setup and workflow check · [spec](tasks/T00-setup.md) · [report](reports/T00-setup.md)
 - [x] T01 — The feature contract: from packets to flows · [spec](tasks/T01-feature-contract.md) · [report](reports/T01-feature-contract.md)
-- [ ] T02 — Flow features and synthetic traffic · [spec](tasks/T02-features-synthetic.md)
+- [x] T02 — Flow features and synthetic traffic · [spec](tasks/T02-features-synthetic.md) · [report](reports/T02-features-synthetic.md)
 - [ ] T03 — Preprocessing without leakage · [spec](tasks/T03-preprocessing.md)
 - [ ] T04 — Baselines: majority class, perceptron, logistic regression · [spec](tasks/T04-baselines-logreg.md)
 - [ ] T05 — MLP from scratch, part 1: layers and backpropagation · [spec](tasks/T05-mlp-backprop.md)

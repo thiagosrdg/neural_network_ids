@@ -97,7 +97,9 @@ Consequences used as ranges in `schema.py`: `duration_s` ≤ 1800 and every gap 
 
 Optional columns, allowed but not required: `label` (class name), `is_attack` (0 or 1), and
 `capture_id` (which capture the flow came from). They are also never model inputs: a label used
-as an input is target leakage.
+as an input is target leakage. `is_attack` alone decides benign (0) versus attack (1); `label`
+can name a benign subclass (`web`, `dns`, `ssh_session` in the synthetic data; `normal` in
+folder datasets). Later tasks select normal flows with `is_attack == 0`, never by label name.
 
 Identifiers are metadata only. With IP addresses, exact ports, timestamps, or flow IDs as
 inputs, a model learns shortcuts ("this IP was the attacker in my lab") instead of behavior.
@@ -116,9 +118,9 @@ packet counts. Gaps are `g_i = t_(i+1) - t_i` for i = 1..n-1.
 |---|---|---|---|---|---|---|
 | `proto_tcp` | int | 1 if protocol = 6, else 0 | — | 0–1 | One-hot group `proto`: exactly one of the four is 1 | Most scans and brute force use TCP; combined with the flag counts it separates a normal session from a probe. |
 | `proto_udp` | int | 1 if protocol = 17, else 0 | — | 0–1 | — | UDP scans (`nmap -sU`) and amplification floods (DNS, NTP) are UDP; a UDP flow with many packets and no reply is unusual. |
-| `proto_icmp` | int | 1 if protocol = 1 (ICMP) or 58 (ICMPv6), else 0 | — | 0–1 | — | Ping sweeps (`nmap -sn`) and ICMP floods; ICMP tunnels show up as ICMP flows with many or large packets. |
+| `proto_icmp` | int | 1 if protocol = 1 (ICMP) or 58 (ICMPv6), else 0 | — | 0–1 | — | Ping sweeps (`nmap -sn`) and ICMP floods; ICMP tunnels show up as ICMP flows with many or large packets. On a local Ethernet network `nmap -sn` uses ARP instead, which v1 skips as non-IP. |
 | `proto_other` | int | 1 if the protocol is none of the above (for example GRE, ESP, SCTP) | — | 0–1 | — | Rare protocols (GRE, raw IP, or `nmap -sO` protocol scans) are uncommon on most LANs, so they stand out. |
-| `duration_s` | float | `t_n - t_1` | s | 0–1800 | One packet: 0 | Scan probes and SYN floods last close to 0 s; slowloris-style DoS and C2 beacons keep flows open for a long time. |
+| `duration_s` | float | `t_n - t_1` | s | 0–1800 | One packet: 0 | Scan probes and SYN floods last close to 0 s; slowloris-style DoS and a long-lived C2 channel keep one flow open for a long time. C2 beacons that open a new connection each time are many short flows, so one flow does not show them. |
 | `fwd_packets` | int | `n_f`, packets in the forward direction | packets | ≥ 1 | Always ≥ 1 (the first packet is forward) | A probe sends 1–2 packets; brute force and floods send many from one side. |
 | `bwd_packets` | int | `n_b`, packets in the backward direction | packets | ≥ 0 | No reply: 0 | A probe to a filtered port gets no reply (0); a SYN flood gets few replies compared with its forward packets. |
 | `fwd_bytes` | int | Sum of `ip_len` over forward packets | bytes | ≥ 20 | — | Exfiltration and uploads send many bytes forward; scans send only headers (about 40–60 bytes per packet). |
@@ -127,8 +129,8 @@ packet counts. Gaps are `g_i = t_(i+1) - t_i` for i = 1..n-1.
 | `pkt_len_std` | float | Population std of `L_1..L_n` | bytes | 0–32777.5 | One packet: 0 | Near 0 means identical packets, as in automated floods and scans; real sessions vary. |
 | `pkt_len_min` | int | Min of `L_1..L_n` | bytes | 20–65575 | — | Very small minimums with no data packets suggest probes; in v1 fragments are skipped, so tiny `nmap -f` fragments do not reach it. |
 | `pkt_len_max` | int | Max of `L_1..L_n` | bytes | 20–65575 | — | A max near the header size means no data was ever sent (probe or failed handshake); a max at the MTU means bulk transfer. |
-| `iat_mean_s` | float | Mean of gaps `g_1..g_(n-1)` | s | 0–120 | One packet (no gaps): 0 | Floods have tiny gaps; slow scans (`nmap -T0`, `-T1`) and slow DoS have long gaps. |
-| `iat_std_s` | float | Population std of the gaps | s | 0–60 | Fewer than 2 gaps: 0 | Very regular gaps (low std) suggest a machine: C2 beaconing, scripted brute force, or a timed scan. |
+| `iat_mean_s` | float | Mean of gaps `g_1..g_(n-1)` | s | 0–120 | One packet (no gaps): 0 | Floods have tiny gaps; slow DoS (slowloris) has long gaps inside one flow. Slow scans (`nmap -T0` waits 5 minutes between probes, `-T1` 15 seconds) put the wait between probes, and each probe is its own flow, so per-flow IAT features cannot see it; host-window features can. |
+| `iat_std_s` | float | Population std of the gaps | s | 0–60 | Fewer than 2 gaps: 0 | Very regular gaps (low std) inside one flow suggest a machine: scripted brute force on one connection, or a long-lived C2 channel with a fixed heartbeat. C2 beacons that open a new connection each time spread their regular timing over many flows, where only host-window features see it. |
 | `iat_max_s` | float | Max of the gaps | s | 0–120 | One packet: 0 | A long pause inside one flow is typical of slow DoS (slowloris) and of keep-alive C2 channels. |
 | `syn_count` | int | Packets (both directions) with the SYN flag set | packets | ≥ 0 | Non-TCP: 0 | `nmap -sS` to a closed port: 1 SYN and 0 bytes of data; SYN floods: SYNs with no completed handshake. |
 | `ack_count` | int | Packets with the ACK flag set | packets | ≥ 0 | Non-TCP: 0 | A normal TCP flow ACKs almost every packet; a SYN-only flow (ack_count 0 or 1) never completed the handshake. `nmap -sA` sends lone ACKs to map firewalls. |
@@ -144,8 +146,10 @@ packet counts. Gaps are `g_i = t_(i+1) - t_i` for i = 1..n-1.
 | `dst_port_class_dynamic` | int | 1 if TCP or UDP and `dst_port` is 49152–65535 | — | 0–1 | — | Flows that start toward a dynamic (ephemeral) port are unusual for clients and can be back-connect shells or P2P traffic; a full port scan hits this class too. |
 | `dst_port_class_none` | int | 1 if the protocol has no ports: ICMP, ICMPv6, or `proto_other` | — | 0–1 | Set by protocol, never by port value | Marks portless traffic (ICMP, other protocols), so the model does not mix ping sweeps with TCP or UDP port behavior. |
 
-"Type" is the column dtype in the flows table: int = int64, float = float64 (an integer dtype is
-also accepted for float features, because CSV files lose the decimal point on whole numbers).
+"Type" is the column dtype in the flows table: int = int64, float = float64. An integer dtype is
+also accepted for float features: a CSV written by another tool or by hand can store whole
+numbers without a decimal point, and pandas then reads that column as int64. (A CSV written by
+pandas `to_csv` keeps `0.0`, which `read_csv` reads back as float64.)
 `dst_port` is always the forward direction's destination port (the port of the first packet).
 
 ## 5. Edge-case rules (summary)
