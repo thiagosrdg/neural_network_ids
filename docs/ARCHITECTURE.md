@@ -157,6 +157,9 @@ my-captures/
 - A model trained on one network often performs worse on another; evaluate on captures from a
   different network or day before trusting it.
 - Synthetic data only tests the code. Detection quality depends on the captures you train on.
+- `data/processed/synthetic.json` records how a synthetic table was made. Its
+  `flipped_flow_ids` is the answer key to the label noise: it is used only to compute the
+  perfect-model ceiling for a split, and is never read by preprocessing or training.
 - This is a learning and portfolio project, not a production intrusion detection system.
 
 ## Extension points

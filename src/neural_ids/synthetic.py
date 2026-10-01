@@ -65,6 +65,7 @@ MSS = 1448  # TCP payload per full segment (1500 MTU - 52)
 MAX_UDP_LEN = 1500  # one Ethernet MTU, no fragmentation
 
 EPHEMERAL_PORTS = (32768, 61000)  # Linux client ports [low, high): registered and dynamic
+SSH_MAX_AUTH_TRIES = 6  # sshd's MaxAuthTries default: it disconnects after 6 failures
 _COMMON_PORTS = (21, 22, 23, 25, 53, 80, 110, 139, 143, 443, 445, 3306, 3389, 5900, 8080)
 
 
@@ -105,6 +106,52 @@ class _Builder:
 def _lerp(easy: float, hard: float, difficulty: float) -> float:
     """Linear interpolation: `easy` at difficulty 0, `hard` at difficulty 1."""
     return easy + (hard - easy) * difficulty
+
+
+def _rtt(rng: np.random.Generator) -> float:
+    """Round-trip time in seconds, log-uniform from 1 ms (LAN) to 150 ms (far away).
+
+    One distribution for every class: an RTT range that differed by class would be a
+    generator artifact that a model could learn instead of behavior.
+    """
+    return float(np.exp(rng.uniform(np.log(0.001), np.log(0.15))))
+
+
+def _program_wait(rng: np.random.Generator) -> float:
+    """How long a program waits before it sends a password: log-uniform 2 ms to 5 s.
+
+    Shared by attack tools and benign scripts, so their timing cannot tell them apart.
+    """
+    return float(np.exp(rng.uniform(np.log(0.002), np.log(5.0))))
+
+
+def _attempt_send_gaps(rng: np.random.Generator, wait: float, jitter: float, k: int) -> np.ndarray:
+    """Gaps before k password packets: `wait` with relative `jitter`, clipped to 0-5 s.
+
+    Shared by the brute-force tool and the failing script, so one attempt of each has the
+    same timing distribution. Output: (k,) seconds.
+    """
+    return np.clip(wait * (1.0 + jitter * rng.standard_normal(k)), 0.0, 5.0)
+
+
+def _password_lens(rng: np.random.Generator, spread: int, k: int) -> np.ndarray:
+    """IP lengths of k password packets: TCP_HDR + 84 + 0..spread bytes (inclusive). (k,)"""
+    return TCP_HDR + 84 + rng.integers(0, spread + 1, k)
+
+
+def _tool_jitter(difficulty: float) -> float:
+    """Relative timing noise of a program: 1% (machine-regular) up to 40% at difficulty 1."""
+    return _lerp(0.01, 0.4, difficulty)
+
+
+def _sshd_failure_delays(rng: np.random.Generator, k: int) -> np.ndarray:
+    """Server delays before k "login failed" replies: (k,) seconds.
+
+    The delay is a property of the server (one value per connection, 0.5-2.5 s, with 2%
+    noise), so it is the same whoever is logging in.
+    """
+    delay = float(rng.uniform(0.5, 2.5))
+    return np.maximum(delay * (1.0 + 0.02 * rng.standard_normal(k)), 0.01)
 
 
 def _tcp_open(b: _Builder, rtt: float, syn_len: int = SYN_LINUX) -> None:
@@ -152,7 +199,7 @@ def web(rng: np.random.Generator, difficulty: float = 0.5, t0: float = BASE_TIME
       so a benign flow gets a registered or dynamic port class.
     """
     port = int(rng.choice([80, 443, 8080, 8443], p=[0.2, 0.7, 0.05, 0.05]))
-    rtt = float(rng.uniform(0.005, 0.1))
+    rtt = _rtt(rng)
     b = _Builder()
     roll = rng.random()
     if roll < 0.3 * difficulty:
@@ -192,14 +239,15 @@ def dns(rng: np.random.Generator, difficulty: float = 0.5, t0: float = BASE_TIME
       packet seen goes from the server to the client's ephemeral port (registered or dynamic
       class), with no reply, like a one-packet UDP flood.
     """
-    rtt = float(rng.uniform(0.002, 0.15))
+    rtt = _rtt(rng)
     query = UDP_HDR + int(rng.integers(29, 80))  # 12-byte DNS header + question
     answer = query + int(rng.integers(16, 400))
     b = _Builder()
     roll = rng.random()
     if roll < 0.3 * difficulty:
         tries = int(rng.integers(1, 4))
-        b.add(np.r_[0.0, np.full(tries - 1, 5.0)], 1, query)
+        retry_gaps = rng.normal(5.0, 0.005, tries - 1)  # 5 s timer, a few ms of OS jitter
+        b.add(np.r_[0.0, retry_gaps], 1, query)
     elif roll < 0.5 * difficulty:
         b.add(0.0, 1, answer)
         return b.build(t0, PROTO_UDP, int(rng.integers(*EPHEMERAL_PORTS)))
@@ -211,24 +259,26 @@ def dns(rng: np.random.Generator, difficulty: float = 0.5, t0: float = BASE_TIME
 def ssh_session(
     rng: np.random.Generator, difficulty: float = 0.5, t0: float = BASE_TIME
 ) -> FlowPackets:
-    """An interactive SSH session: handshake, key exchange, human typing, client close.
+    """An interactive SSH session: handshake, key exchange, human typing, then a close.
 
     Each keystroke is a small client packet echoed by the server; sometimes the server sends
     command output instead. Gaps between keystrokes are log-normal (irregular, human) with
     occasional long pauses. With higher difficulty sessions can be as short as 3 keystrokes,
     which makes them look more like brute force.
 
-    Hard variant (probability 0.4 * difficulty): a short benign SSH connection (see
-    `_short_ssh`: a mistyped password, `git fetch`, or a small `scp`), which looks like one
-    brute-force connection when seen as a single flow.
+    Who closes follows behavior, not the class: usually the client (the user types `exit`),
+    sometimes the server (an idle timeout such as ClientAliveInterval, or the shell ends).
+
+    Hard variant (probability 0.6 * difficulty): a short benign SSH connection (see
+    `_short_ssh`), which can look like one brute-force connection when seen as a single flow.
     """
-    rtt = float(rng.uniform(0.01, 0.15))
+    rtt = _rtt(rng)
     b = _Builder()
     _tcp_open(b, rtt)
     _ssh_setup(b, rtt, rng, jitter=1.0)
-    if rng.random() < 0.4 * difficulty:
-        _short_ssh(b, rtt, rng)
-        _tcp_close(b, rtt, closer=1)
+    if rng.random() < 0.6 * difficulty:
+        _short_ssh(b, rtt, rng, difficulty)
+        _tcp_close(b, rtt, closer=1)  # a client program that is done hangs up
         return b.build(t0, PROTO_TCP, 22)
 
     m = int(rng.integers(round(_lerp(30, 3, difficulty)), 400))  # keystrokes
@@ -244,26 +294,38 @@ def ssh_session(
     gaps = np.stack([typing, np.full(m, rtt)], axis=1).ravel()  # (2m,) keystroke, echo, ...
     sizes = np.stack([np.full(m, TCP_HDR + 36), echo], axis=1).ravel()
     b.add(gaps, np.tile([1, -1], m), sizes, PSH | ACK)
-    _tcp_close(b, rtt, closer=1)
+    _tcp_close(b, rtt, closer=1 if rng.random() < 0.7 else -1)
     return b.build(t0, PROTO_TCP, 22)
 
 
-def _short_ssh(b: _Builder, rtt: float, rng: np.random.Generator) -> None:
+def _short_ssh(b: _Builder, rtt: float, rng: np.random.Generator, difficulty: float) -> None:
     """The rest of a short benign SSH connection, after the key exchange (before the close).
 
     - mistyped password: one failed attempt, the same packets and server delay as one
       brute-force attempt, then a correct password and a few keystrokes;
     - `git fetch`: key login, one request, a burst of response segments;
-    - small `scp` upload: key login, a burst of data segments, one reply.
+    - small `scp` upload: key login, a burst of data segments, one reply;
+    - failing script: a backup or monitoring job whose password expired sends it, gets
+      "failed" after the server's delay, and gives up. This is one brute-force attempt.
 
-    Seen as one flow, a mistyped password and a brute-force connection look almost the same;
+    Seen as one flow, a single failed login and one brute-force connection look the same;
     only the number of attempts over many flows (host-window features) separates them.
     """
-    kind = rng.choice(["mistyped_password", "git_fetch", "scp_upload"])
-    password = TCP_HDR + 84 + int(rng.integers(0, 80))
+    kind = rng.choice(["mistyped_password", "git_fetch", "scp_upload", "failing_script"])
+    password = int(_password_lens(rng, 80, 1)[0])
+    if kind == "failing_script":
+        send = float(_attempt_send_gaps(rng, _program_wait(rng), _tool_jitter(difficulty), 1)[0])
+        reply = float(_sshd_failure_delays(rng, 1)[0])
+        b.add([send, reply], [1, -1], [password, TCP_HDR + 36], PSH | ACK)
+        return
     if kind == "mistyped_password":
         # Human typing time, then the server's failure delay (as in `ssh_bruteforce`).
-        b.add([rng.uniform(1.0, 8.0), rng.uniform(0.5, 2.5)], [1, -1], [password, TCP_HDR + 36])
+        b.add(
+            [rng.uniform(1.0, 8.0), float(_sshd_failure_delays(rng, 1)[0])],
+            [1, -1],
+            [password, TCP_HDR + 36],
+            PSH | ACK,
+        )
         login = (rng.uniform(1.0, 8.0), password)  # retyped password
     else:
         login = (0.005, TCP_HDR + int(rng.integers(300, 500)))  # public key, no typing
@@ -303,7 +365,7 @@ def syn_scan(
     state = rng.choice(["open", "closed", "filtered"], p=[0.1, 0.6, 0.3])
     common = rng.random() < 0.5
     port = int(rng.choice(_COMMON_PORTS)) if common else int(rng.integers(1, 65536))
-    rtt = float(rng.uniform(0.001, 0.1))
+    rtt = _rtt(rng)
     connect = rng.random() < 0.5 * difficulty
     syn_len = SYN_LINUX if connect else SYN_NMAP
 
@@ -326,32 +388,31 @@ def ssh_bruteforce(
     """One connection of a password-guessing tool (for example hydra) against SSH.
 
     Handshake and key exchange with identical sizes every time, then 3-6 login attempts: a
-    password packet and the server's "failed" reply after its fixed delay. After the last
-    allowed attempt the server closes the connection. Machine timing: at difficulty 0 the
-    gaps vary by 1%; at difficulty 1 by 40%, and packet sizes vary too.
+    password packet and the server's "failed" reply after its fixed delay. Who closes follows
+    sshd: the server disconnects only after SSH_MAX_AUTH_TRIES (6) failures; with fewer
+    attempts the tool closes the connection itself. Machine timing: at difficulty 0 the gaps
+    vary by 1%; at difficulty 1 by 40%, and packet sizes vary too.
 
     Low-and-slow at higher difficulty: as few as 1 attempt per connection, and the tool
-    waits up to 5 s before each attempt (for example hydra's `-c`), which stays under
+    waits 2 ms to 5 s before each attempt (for example hydra's `-c`), which stays under
     per-connection limits such as sshd's MaxAuthTries. One such flow looks like a person who
     mistyped a password once (`ssh_session`); only host-window features, which count attempts
     over many flows, can tell them apart.
     """
-    rtt = float(rng.uniform(0.005, 0.1))
-    jitter = _lerp(0.01, 0.4, difficulty)
+    rtt = _rtt(rng)
     b = _Builder()
     _tcp_open(b, rtt)
     _ssh_setup(b, rtt, rng, jitter=difficulty)
 
-    k = int(rng.integers(round(_lerp(3, 1, difficulty)), 7))  # attempts in this connection
-    delay = float(rng.uniform(0.5, 2.5))  # server's failure delay, fixed per connection
-    reply_gaps = np.maximum(delay * (1.0 + jitter * rng.standard_normal(k)), 0.01)
-    wait = _lerp(0.002, float(rng.uniform(0.2, 5.0)), difficulty)  # tool's wait per attempt
-    send_gaps = np.maximum(wait * (1.0 + jitter * rng.standard_normal(k)), 0.0)
-    extra = rng.integers(0, int(80 * difficulty) + 1, k)  # extra: (k,) password length change
+    k = int(rng.integers(round(_lerp(3, 1, difficulty)), SSH_MAX_AUTH_TRIES + 1))  # attempts
+    reply_gaps = _sshd_failure_delays(rng, k)  # (k,) the server's timing, not the tool's
+    wait = _lerp(0.002, _program_wait(rng), difficulty)  # tool's wait before each attempt
+    send_gaps = _attempt_send_gaps(rng, wait, _tool_jitter(difficulty), k)  # (k,)
+    passwords = _password_lens(rng, int(80 * difficulty), k)  # (k,) 0-80 extra bytes at d=1
     gaps = np.stack([send_gaps, reply_gaps], axis=1).ravel()  # (2k,)
-    sizes = np.stack([TCP_HDR + 84 + extra, np.full(k, TCP_HDR + 36)], axis=1).ravel()
+    sizes = np.stack([passwords, np.full(k, TCP_HDR + 36)], axis=1).ravel()
     b.add(gaps, np.tile([1, -1], k), sizes, PSH | ACK)
-    _tcp_close(b, rtt, closer=-1)  # the server hangs up
+    _tcp_close(b, rtt, closer=-1 if k == SSH_MAX_AUTH_TRIES else 1)
     return b.build(t0, PROTO_TCP, 22)
 
 
@@ -361,13 +422,27 @@ def udp_flood(
     """Many forward UDP packets to one port at a high rate; the target never answers.
 
     At difficulty 0: 300-3000 identical packets at 1,000-20,000 packets/s with regular gaps.
-    At difficulty 1: as few as 3 packets, rates down to 2 packets/s, random gaps and sizes,
-    so small slow floods look like unanswered DNS queries.
+    At difficulty 1: as few as 2 packets (log-uniform counts, so small floods are common),
+    rates down to 2 packets/s, random sizes. Timing noise is drawn per flow (0 up to 5% at
+    difficulty 0, up to 100% at 1), so regular floods (hping3 `-i u…`) stay common.
+
+    Hard variant (probability 0.6 * difficulty): spoofed or random source ports. Every packet
+    has a new 5-tuple, so it is its own one-packet flow with no answer, and one call returns
+    one such packet. Toward port 53 it is a DNS-query-sized packet (a random-subdomain or
+    "water torture" flood). Per flow it looks like a lost DNS query or a single UDP probe;
+    only host-window features, which count flows per destination, see the flood.
     """
     port = int(rng.choice([53, 80, 123, 443, int(rng.integers(1, 65536))]))
-    n = int(rng.integers(round(_lerp(300, 3, difficulty)), 3001))
+    if rng.random() < 0.6 * difficulty:
+        query_like = port == 53
+        size = UDP_HDR + int(rng.integers(29, 80) if query_like else rng.integers(0, 1400))
+        b = _Builder()
+        b.add(0.0, 1, size)
+        return b.build(t0, PROTO_UDP, port)
+    low = _lerp(300.0, 2.0, difficulty)
+    n = int(np.exp(rng.uniform(np.log(low), np.log(3001.0))))
     pps = float(np.exp(rng.uniform(np.log(_lerp(1000.0, 2.0, difficulty)), np.log(20000.0))))
-    jitter = _lerp(0.05, 1.0, difficulty)
+    jitter = float(rng.uniform(0.0, _lerp(0.05, 1.0, difficulty)))  # per flow
     gaps = np.maximum((1.0 / pps) * (1.0 + jitter * rng.standard_normal(n)), 0.0)  # (n,)
     gaps = gaps[np.cumsum(np.minimum(gaps, _MAX_GAP_S)) <= _MAX_DURATION_S]  # the first stays
     n = gaps.size
@@ -462,13 +537,15 @@ def make_dataset_with_provenance(
         "difficulty": difficulty,
         "label_noise": label_noise,
     }
-    return df, _provenance(args, classes, df["label"].to_numpy())
+    return df, _provenance(args, classes, df["label"].to_numpy(), df["flow_id"].to_numpy())
 
 
-def _provenance(args: dict, classes: np.ndarray, labels: np.ndarray) -> dict:
+def _provenance(args: dict, classes: np.ndarray, labels: np.ndarray, flow_ids: np.ndarray) -> dict:
     """How a synthetic table was made, from the true classes and the (noisy) labels.
 
-    Input: classes and labels, both (n,) class names. O(n) time.
+    Input: classes, labels, flow_ids, all (n,). `flipped_flow_ids` lets later tasks compute
+    the exact perfect-model ceiling for any split; it must never be used for training (it
+    is the answer key to the noise). O(n) time.
     """
     true_attack = np.isin(classes, ATTACK_CLASSES)  # (n,) bool
     labeled_attack = np.isin(labels, ATTACK_CLASSES)  # (n,) bool
@@ -483,6 +560,7 @@ def _provenance(args: dict, classes: np.ndarray, labels: np.ndarray) -> dict:
         "class_counts_labeled": {name: int((labels == name).sum()) for name in names},
         "flipped_normal_to_attack": n_normal_to_attack,
         "flipped_attack_to_normal": n_attack_to_normal,
+        "flipped_flow_ids": sorted(str(i) for i in flow_ids[true_attack != labeled_attack]),
         "perfect_model_vs_noisy_labels": perfect_model_scores(
             int(true_attack.sum()), n_attack_to_normal, n_normal_to_attack
         ),
@@ -499,6 +577,16 @@ def perfect_model_scores(
     - recall = TP / labeled attacks = (A - a2n) / (A - a2n + n2a)
     - precision = TP / predicted attacks = (A - a2n) / A
     A value is None when its denominator is 0. O(1).
+
+    How to read the ceiling:
+    - Validation or test data: a model can beat the recall ceiling only by flagging more
+      flows (it then also flags true normal flows), which lowers its precision.
+    - Beating BOTH ceilings on held-out data by more than random variation (more than a few
+      flows) is a strong sign of leakage that must be investigated: the flips are random, so
+      no feature can predict them. Where classes overlap, a model can land on a few flipped
+      flows by luck, so a tiny excess on a small split is not proof.
+    - Training data: beating them means the model memorized the noisy labels (overfitting).
+    For a split, compute the counts from `flipped_flow_ids` in synthetic.json.
     """
     tp = n_true_attack - n_attack_to_normal
     labeled = tp + n_normal_to_attack

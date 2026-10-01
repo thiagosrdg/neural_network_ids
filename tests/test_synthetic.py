@@ -25,6 +25,7 @@ from neural_ids.synthetic import (
     ATTACK_CLASSES,
     GENERATORS,
     NORMAL_CLASSES,
+    SSH_MAX_AUTH_TRIES,
     TCP_HDR,
     main,
     make_dataset,
@@ -398,6 +399,9 @@ def test_provenance_matches_the_table() -> None:
     net = prov["flipped_normal_to_attack"] - prov["flipped_attack_to_normal"]
     assert int(df["is_attack"].sum()) == true_attacks + net
     assert prov["flipped_normal_to_attack"] > 0 and prov["flipped_attack_to_normal"] > 0
+    flipped = set(prov["flipped_flow_ids"])
+    assert len(flipped) == prov["flipped_normal_to_attack"] + prov["flipped_attack_to_normal"]
+    assert flipped <= set(df["flow_id"])
 
 
 def test_no_label_noise_gives_perfect_scores() -> None:
@@ -416,3 +420,77 @@ def test_command_writes_provenance_json(tmp_path, capsys) -> None:
     assert prov["n_flows"] == 300 and prov["difficulty"] == 1.0
     assert set(prov["perfect_model_vs_noisy_labels"]) == {"attack_recall", "attack_precision"}
     assert "attack_recall" in capsys.readouterr().out
+
+
+# ---------- Artifact fixes: closer, failing script, spoofed flood ----------
+
+
+SETUP_PACKETS = 11  # 3 handshake + 8 key-exchange packets; an 88-byte packet can occur there
+
+
+def failures(p: FlowPackets) -> int:
+    """'login failed' replies: 88-byte backward packets after the handshake and key exchange.
+
+    (In ssh_session, keystroke echoes have the same size; the tests below only compare
+    brute force and one-failure flows, where this does not matter.)
+    """
+    after = slice(SETUP_PACKETS, None)
+    return int(((p.direction[after] == -1) & (p.ip_len[after] == TCP_HDR + 36)).sum())
+
+
+def test_bruteforce_server_closes_only_at_max_auth_tries() -> None:
+    """sshd hangs up after 6 failures; with fewer attempts the tool (forward) closes."""
+    for seed in range(5):  # several seeds: the rule must not depend on one
+        for p in generate("ssh_bruteforce", 1.0, n=200, seed=seed):
+            first_fin = int(np.flatnonzero(p.tcp_flags & FIN)[0])
+            server_closed = p.direction[first_fin] == -1
+            assert server_closed == (failures(p) == SSH_MAX_AUTH_TRIES)
+
+
+def test_packet_balance_does_not_reveal_the_class() -> None:
+    """fwd_packets - bwd_packets takes the same values (0 and 2) in both SSH classes."""
+    for name in ("ssh_bruteforce", "ssh_session"):
+        f = features_of(name, 1.0, n=300)
+        diff = set(f["fwd_packets"] - f["bwd_packets"])
+        assert {0, 2} <= diff, name
+
+
+def test_failing_script_matches_one_bruteforce_attempt() -> None:
+    """A benign one-failure flow has the same packet structure as a 1-attempt brute force."""
+
+    def one_failure(p: FlowPackets) -> bool:
+        return failures(p) == 1
+
+    def shape(p: FlowPackets) -> tuple:
+        return (tuple(p.direction), tuple(p.tcp_flags))
+
+    brute = {shape(p) for p in generate("ssh_bruteforce", 1.0, n=300) if one_failure(p)}
+    benign = {shape(p) for p in generate("ssh_session", 1.0, n=300) if one_failure(p)}
+    assert brute & benign  # at least one identical direction-and-flag sequence
+
+
+def test_spoofed_flood_packets_are_single_packet_flows() -> None:
+    f = features_of("udp_flood", 1.0, n=300)
+    single = f["fwd_packets"] == 1
+    assert single.mean() > 0.4  # common at difficulty 1
+    assert (f.loc[single, "bwd_packets"] == 0).all()
+    assert (features_of("udp_flood", 0.0)["fwd_packets"] >= 300).all()  # none at difficulty 0
+
+
+def test_dns_retries_are_not_perfectly_regular() -> None:
+    """A real retry timer varies by milliseconds; exact 5.000 s gaps would be an artifact."""
+    f = features_of("dns", 1.0, n=400)
+    retries = f[f["fwd_packets"] >= 3]
+    assert len(retries) > 0 and (retries["iat_std_s"] > 0).all()
+
+
+def test_two_packet_udp_flows_exist_in_both_classes() -> None:
+    for name in ("dns", "udp_flood"):
+        f = features_of(name, 1.0, n=600)
+        assert (f["fwd_packets"] + f["bwd_packets"] == 2).any(), name
+
+
+def test_regular_floods_stay_common_at_difficulty_1() -> None:
+    f = features_of("udp_flood", 1.0, n=600)
+    multi = f[f["fwd_packets"] >= 10]
+    assert ((multi["iat_std_s"] / multi["iat_mean_s"]) < 0.1).mean() > 0.05
