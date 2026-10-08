@@ -70,6 +70,35 @@ statistics, time between packets, TCP flag counts, rates, the backward/forward b
 the destination-port class (one-hot). IP addresses, MAC addresses, exact ports, timestamps,
 and flow IDs are kept as metadata for labels and reports, and are never model inputs.
 
+## Preprocessing (T03)
+`preprocess.py` turns a flows table into `(n, 29)` float32 inputs, the same way for every table:
+1. `validate_flows` first: a table that breaks the contract is rejected, not silently scaled.
+   It also guarantees finite values >= 0, so `log1p` is always defined.
+2. Select `schema.FEATURE_NAMES` in contract order (metadata and labels never pass).
+3. `log1p` on the 21 features that are not one-hot (`LOG_FEATURES`; counts, bytes, durations,
+   gaps, rates, the byte ratio, and packet lengths, which reach ~64 KB in captures taken with
+   segmentation offload). Each one's reason is next to it in the code.
+4. Standardize those 21 columns with the training mean and std. A column that is constant in
+   training (by scikit-learn's floating-point rule, not `std == 0`) gets scale 1, so one URG
+   flag at scoring time becomes log1p(1) ≈ 0.69 (its distance to the training value) instead
+   of an enormous number. The 8 one-hot columns stay 0/1.
+
+Every learned value (means, scales, the class list) comes from the training split only. The
+fitted preprocessor is saved as self-contained JSON (schema version, feature order, the log1p
+and standardized lists, means, scales); `load` refuses another schema version or feature order,
+and a loaded preprocessor never reads the module constants, so later code changes cannot
+change an old model's inputs.
+
+Targets: `y_binary = is_attack`; `y_class` indexes `class_names = ("normal", sorted attack
+labels in train)`, with 0 for every `is_attack == 0` row. Arrays are saved with `np.savez`
+(class names as fixed-width Unicode, readable with `allow_pickle=False`), together with the
+feature order, the schema version, the data source (`SYNTHETIC` for generated tables), and
+`flow_id` per row (metadata, never in `X`) for the label-noise ceiling and error lookup. The split is
+stratified by label and random; `split` is the one function to replace with a split by capture
+or time window for real captures (phase 2). The command also counts val/test rows whose feature
+vector has an exact copy in train: harmless for independent synthetic flows, a warning sign
+with real captures.
+
 ## The networks
 
 ### MLP classifier (supervised)

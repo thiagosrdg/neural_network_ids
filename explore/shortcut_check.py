@@ -13,6 +13,12 @@
 # A whole-pair score can hide an artifact that only part of a class has, so the script also
 # checks the hard subset of each pair: the flows that look most alike per flow.
 #
+# The hardest case is one SSH connection with exactly one failed login: a low-and-slow
+# brute-force connection (1 attempt) or a benign script whose password expired. Both have
+# 3 (handshake) + 8 (key exchange) + 2 (attempt and reply) + 3 (close) = 16 packets, and every
+# other SSH flow in the generators has at least 18 (2 attempts), so `16 packets` selects
+# exactly them.
+#
 # Run: uv run python explore/shortcut_check.py
 # The numbers describe SYNTHETIC data and the generator rules, not detection performance.
 
@@ -38,20 +44,23 @@ SUBSETS = {
     "ssh_bruteforce": ("<= 20 packets", lambda d: d["fwd_packets"] + d["bwd_packets"] <= 20),
     "syn_scan": ("<= 3 packets", lambda d: d["fwd_packets"] + d["bwd_packets"] <= 3),
     "udp_flood": ("no reply", lambda d: d["bwd_packets"] == 0),
+    # Not per class: exactly one failed SSH login (16 packets, see the header).
+    "one_failure": ("exactly 1 failed login", lambda d: d["fwd_packets"] + d["bwd_packets"] == 16),
 }
 
 
-def check_pair(attack: str, benign: str, subset: bool = False) -> dict[str, object]:
+def check_pair(attack: str, benign: str, subset: bool | str = False) -> dict[str, object]:
     """5-fold CV accuracy of a random forest on one pair, and its top 3 features.
 
-    With `subset`, only the pair's hard subset (`SUBSETS`). Feature importances come from one
+    With `subset=True`, only the pair's hard subset (`SUBSETS[attack]`); with a string, the
+    subset of that name. Feature importances come from one
     fit on all rows used (they explain the model, they are not a score).
     Cost: O(folds * trees * n log n) for n rows.
     """
     pair = df[df["label"].isin([attack, benign])]
     name = f"{attack} vs {benign}"
     if subset:
-        description, mask = SUBSETS[attack]
+        description, mask = SUBSETS[attack if subset is True else subset]
         pair = pair[mask(pair)]
         name += f" [{description}]"
     x = pair[list(FEATURE_NAMES)].to_numpy()  # x: (n, 29)
@@ -73,9 +82,18 @@ def check_pair(attack: str, benign: str, subset: bool = False) -> dict[str, obje
 
 table = pd.DataFrame([check_pair(a, b) for a, b in PAIRS])
 hard = pd.DataFrame([check_pair(a, b, subset=True) for a, b in PAIRS])
+one_failure = check_pair("ssh_bruteforce", "ssh_session", subset="one_failure")
 print(f"SYNTHETIC data, difficulty 1, label_noise 0, {FOLDS}-fold CV, random forest")
 print(f"target: accuracy < {TARGET} for every pair")
 with pd.option_context("display.width", 200, "display.max_colwidth", 120):
     print(table.round(3).to_string(index=False))
     print("\nHard subsets (rows = attack/benign; informational, no target):")
     print(hard.drop(columns="below_target").round(3).to_string(index=False))
+    majority = max(map(int, one_failure["rows"].split("/"))) / sum(
+        map(int, one_failure["rows"].split("/"))
+    )
+    print(
+        f"\nExactly one failed SSH login: accuracy {one_failure['accuracy']:.3f} "
+        f"(std {one_failure['std']:.3f}), rows {one_failure['rows']}, "
+        f"majority-class accuracy {majority:.3f}"
+    )

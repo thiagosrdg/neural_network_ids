@@ -36,7 +36,8 @@ features; synthetic data and T10 captures share it. Six packet-level generators 
 | udp_flood vs dns | 0.914 (0.010) | fwd_bytes 0.18, pkt_len_mean 0.16, pkt_len_max 0.15 |
 | hard subsets: SSH ≤ 20 pkts / scan ≤ 3 pkts / UDP no reply | 0.775 / 0.833 / 0.886 | timing; bytes_per_s, IAT; fwd_bytes |
 
-- Target < 0.95. Before (user's check): 0.996, 0.902, 1.000. Exact one-failure SSH: 0.508 (majority 0.530).
+- Target < 0.95. Before (user's check): 0.996, 0.902, 1.000. Exactly one failed SSH login (16 packets): 0.576 (majority 0.560),
+  from `explore/shortcut_check.py` (corrected in T03; the earlier 0.508 came from a script not in the repo).
 - Acceptance criteria: all pass. `ml-reviewer`: round 1, 6 should-fix; round 2, 5 should-fix; all fixed.
 
 ## Key concepts
