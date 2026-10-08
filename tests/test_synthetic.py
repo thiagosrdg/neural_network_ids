@@ -32,7 +32,7 @@ from neural_ids.synthetic import (
     make_dataset_with_provenance,
     perfect_model_scores,
 )
-from neural_ids.utils import set_seed
+from neural_ids.utils import file_sha256, set_seed
 
 DIFFICULTIES = (0.0, 0.5, 1.0)
 
@@ -420,6 +420,7 @@ def test_command_writes_provenance_json(tmp_path, capsys) -> None:
     assert prov["n_flows"] == 300 and prov["difficulty"] == 1.0
     assert set(prov["perfect_model_vs_noisy_labels"]) == {"attack_recall", "attack_precision"}
     assert "attack_recall" in capsys.readouterr().out
+    assert prov["csv_sha256"] == file_sha256(out)  # fingerprint of the CSV just written
 
 
 # ---------- Artifact fixes: closer, failing script, spoofed flood ----------

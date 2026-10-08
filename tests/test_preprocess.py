@@ -33,7 +33,7 @@ from neural_ids.schema import (
     SchemaError,
 )
 from neural_ids.synthetic import make_dataset
-from neural_ids.utils import set_seed
+from neural_ids.utils import file_sha256, set_seed
 
 
 @pytest.fixture(scope="module")
@@ -364,11 +364,13 @@ def test_command_writes_splits_and_preprocessor(tmp_path, capsys) -> None:
             x, y_binary, y_class = data["X"], data["y_binary"], data["y_class"]
             class_names, feature_names = data["class_names"], data["feature_names"]
             schema_version, source = data["schema_version"], data["source"]
+            input_sha256 = str(data["input_sha256"])
         assert x.dtype == np.float32 and x.ndim == 2 and np.isfinite(x).all()
         assert y_binary.shape == y_class.shape == (len(x),)
         assert class_names.dtype.kind == "U" and class_names[0] == NORMAL_CLASS
         assert tuple(feature_names) == FEATURE_NAMES
         assert str(schema_version) == SCHEMA_VERSION and str(source) == "SYNTHETIC"
+        assert input_sha256 == file_sha256(csv)  # links the arrays to their input table
         assert ((y_class == 0) == (y_binary == 0)).all()
         assert y_class.max() < len(class_names)
         total += len(x)

@@ -42,6 +42,7 @@ flowchart LR
 | Feature contract (names, units, edge cases, schema version) | `docs/features.md`, `schema.py` | T01 |
 | Shared feature function and synthetic traffic | `features.py`, `synthetic.py` | T02 |
 | Preprocessing (fit on the training split only) | `preprocess.py` | T03 |
+| Split loader (contract check), metrics, gradient check | `splits.py`, `metrics.py`, `gradcheck.py` | T04 |
 | Models from scratch in NumPy | `models/`, `nn/` | T04–T07 |
 | Models in PyTorch, model bundle, `train` command | `torch_models.py`, `bundle.py`, `cli.py` | T08–T09 |
 | Capture reader and flow table | `extract.py` | T10 |
@@ -92,12 +93,33 @@ change an old model's inputs.
 Targets: `y_binary = is_attack`; `y_class` indexes `class_names = ("normal", sorted attack
 labels in train)`, with 0 for every `is_attack == 0` row. Arrays are saved with `np.savez`
 (class names as fixed-width Unicode, readable with `allow_pickle=False`), together with the
-feature order, the schema version, the data source (`SYNTHETIC` for generated tables), and
-`flow_id` per row (metadata, never in `X`) for the label-noise ceiling and error lookup. The split is
+feature order, the schema version, the data source (`SYNTHETIC` for generated tables), the
+SHA-256 of the input CSV (`input_sha256`), and `flow_id` per row (metadata, never in `X`) for the label-noise ceiling and error lookup. The split is
 stratified by label and random; `split` is the one function to replace with a split by capture
 or time window for real captures (phase 2). The command also counts val/test rows whose feature
 vector has an exact copy in train: harmless for independent synthetic flows, a warning sign
 with real captures.
+
+## Baselines and evaluation (T04)
+Every model reads its data with `splits.load_split`, which loads with `allow_pickle=False` and
+refuses arrays whose `schema_version` or `feature_names` differ from the code.
+`metrics.py` computes accuracy, precision, recall, F1, and the confusion matrix with attack as
+the positive class; an undefined ratio (for example, precision when nothing is flagged) is 0,
+as in scikit-learn with `zero_division=0`.
+
+`uv run python -m neural_ids.train_baselines` trains three NumPy models on the training split
+(the validation split is only measured; the test split is not loaded):
+- `MajorityClassifier`: the "free" score (recall 0 when most flows are normal).
+- `Perceptron`: step activation and the perceptron rule, applied per mini-batch.
+- `LogisticRegression`: one sigmoid neuron trained with mini-batch gradient descent on a
+  logit-based BCE (`BCEWithLogitsLoss` form, so no log(0)); zero initial weights, so the first
+  loss is ln 2. It is the building block of the MLP in T05.
+
+For SYNTHETIC data, after training, the evaluation step reads `flipped_flow_ids` from
+`synthetic.json` and prints the label-noise ceiling of the validation split (recall and
+precision of a perfect model scored against the noisy labels). Synthetic flow IDs repeat in
+every run, so the ceiling is computed only when `synthetic.json`'s `csv_sha256` equals the
+arrays' `input_sha256`; otherwise the command says they come from different runs and skips it.
 
 ## The networks
 
@@ -188,7 +210,8 @@ my-captures/
 - Synthetic data only tests the code. Detection quality depends on the captures you train on.
 - `data/processed/synthetic.json` records how a synthetic table was made. Its
   `flipped_flow_ids` is the answer key to the label noise: it is used only to compute the
-  perfect-model ceiling for a split, and is never read by preprocessing or training.
+  perfect-model ceiling for a split, and is never read by preprocessing or training. Its
+  `csv_sha256` ties it to the exact CSV, so a stale json cannot score newer arrays.
 - This is a learning and portfolio project, not a production intrusion detection system.
 
 ## Extension points

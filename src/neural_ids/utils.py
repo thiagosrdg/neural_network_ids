@@ -1,6 +1,6 @@
 """Small helpers shared by the whole project.
 
-For now it holds only `set_seed`, the single entry point for randomness (see CLAUDE.md:
+`set_seed` is the single entry point for randomness (see CLAUDE.md:
 "Randomness only through `neural_ids.utils.set_seed` or an explicit `np.random.Generator`").
 
 Why randomness needs control in machine learning:
@@ -9,8 +9,12 @@ Why randomness needs control in machine learning:
   checked or reproduced. With a fixed seed, the same code gives the same numbers every time.
 """
 
+# `hashlib` (standard library) computes cryptographic hashes such as SHA-256.
+import hashlib
+
 # `random` is Python's built-in (standard library) random number module.
 import random
+from pathlib import Path
 
 # NumPy is the array library we use for all numeric work. `np` is the usual short name.
 import numpy as np
@@ -49,3 +53,17 @@ def set_seed(seed: int) -> np.random.Generator:
     #    `default_rng` uses the PCG64 algorithm, which is fast and statistically strong.
     #    Callers keep this object and pass it to functions that need random numbers.
     return np.random.default_rng(seed)
+
+
+def file_sha256(path: Path) -> str:
+    """SHA-256 of a file's bytes, as 64 lowercase hex characters.
+
+    Used as a fingerprint: two files with the same hash have the same content (a collision is
+    practically impossible), so it links derived files back to the exact table they came from.
+    Reads in 1 MiB chunks: O(file size) time, O(1) memory.
+    """
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

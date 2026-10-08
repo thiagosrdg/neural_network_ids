@@ -5,11 +5,12 @@ it finishes without an exception; `assert` raises an exception when its conditio
 This is like JUnit in Java, but without classes or annotations.
 """
 
+import hashlib
 import random
 
 import numpy as np
 
-from neural_ids.utils import set_seed
+from neural_ids.utils import file_sha256, set_seed
 
 
 def test_same_seed_gives_same_numbers() -> None:
@@ -42,3 +43,13 @@ def test_python_random_is_seeded() -> None:
 
     # After re-seeding with the same value, `random` must repeat the same sequence.
     assert first == second
+
+
+def test_file_sha256_matches_hashlib(tmp_path) -> None:
+    """Chunked reading must give the same hash as hashing the whole content at once."""
+    data = b"flow" * 400_000  # 1.6 MB: more than one 1 MiB chunk
+    path = tmp_path / "f.bin"
+    path.write_bytes(data)
+    assert file_sha256(path) == hashlib.sha256(data).hexdigest()
+    path.write_bytes(data + b"!")
+    assert file_sha256(path) != hashlib.sha256(data).hexdigest()  # one byte changes the hash

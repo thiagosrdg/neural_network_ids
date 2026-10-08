@@ -31,7 +31,7 @@ from neural_ids.schema import (
     SchemaError,
     validate_flows,
 )
-from neural_ids.utils import set_seed
+from neural_ids.utils import file_sha256, set_seed
 
 NORMAL_CLASS = "normal"  # index 0 of every class_names; all rows with is_attack == 0
 
@@ -424,6 +424,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     df = pd.read_csv(args.input)
+    input_sha256 = file_sha256(args.input)  # links the arrays to the exact input table
     source = args.source or data_source(df)
     splits = dict(
         zip(
@@ -450,6 +451,7 @@ def main(argv: list[str] | None = None) -> None:
             feature_names=np.array(FEATURE_NAMES, dtype=str),
             schema_version=np.array(SCHEMA_VERSION),  # 0-d Unicode: checked when loading
             source=np.array(source),
+            input_sha256=np.array(input_sha256),  # 0-d fixed-width Unicode (64 hex chars)
             # Metadata, never part of X: row i of X is flow flow_id[i]. Later tasks use it for
             # the label-noise ceiling (flipped_flow_ids) and to look up misclassified flows.
             flow_id=part["flow_id"].astype(str).to_numpy(dtype=str),  # (n,) fixed-width Unicode

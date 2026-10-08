@@ -44,7 +44,7 @@ from neural_ids.features import (
     flow_record,
 )
 from neural_ids.schema import SCHEMA_VERSION, validate_flows
-from neural_ids.utils import set_seed
+from neural_ids.utils import file_sha256, set_seed
 
 NORMAL_CLASSES: tuple[str, ...] = ("web", "dns", "ssh_session")
 ATTACK_CLASSES: tuple[str, ...] = ("syn_scan", "ssh_bruteforce", "udp_flood")
@@ -662,6 +662,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(args.out, index=False)
+    # Fingerprint of the CSV just written: preprocess copies the hash of its input into every
+    # .npz, so evaluation can tell whether this json describes the arrays it is scoring.
+    prov["csv_sha256"] = file_sha256(args.out)
     json_path = args.out.with_suffix(".json")
     json_path.write_text(json.dumps(prov, indent=2) + "\n")
 
