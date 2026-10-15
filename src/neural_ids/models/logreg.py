@@ -7,6 +7,7 @@
 
 The loss takes logits, not probabilities, like PyTorch's `BCEWithLogitsLoss`: computing
 log(sigmoid(z)) in one stable formula never takes log(0), even for z = ±1000.
+Both formulas live in `neural_ids.nn.functional`, shared with the MLP layers (T05).
 """
 
 from typing import Self
@@ -14,34 +15,10 @@ from typing import Self
 import numpy as np
 
 from neural_ids.models.batching import minibatch_indices
+from neural_ids.nn.functional import bce_loss, sigmoid
 
-
-def sigmoid(z: np.ndarray) -> np.ndarray:
-    """Numerically stable logistic function 1 / (1 + e^(−z)). (n,) -> (n,) in [0, 1].
-
-    The naive formula computes e^(−z), which overflows for z < −709 in float64. Both branches
-    below only compute e^(−|z|) ≤ 1, which never overflows.
-    """
-    e = np.exp(-np.abs(z))  # (n,) in (0, 1]
-    return np.where(z >= 0, 1.0 / (1.0 + e), e / (1.0 + e))
-
-
-def bce_loss(logits: np.ndarray, y: np.ndarray) -> float:
-    """Mean binary cross-entropy computed from logits, without ever taking log(0).
-
-    BCE = −[y·log(p) + (1 − y)·log(1 − p)] with p = sigmoid(z) simplifies to
-        max(z, 0) − z·y + log(1 + e^(−|z|))
-    (the same formula as PyTorch `BCEWithLogitsLoss`).
-
-    Args:
-        logits: (n,) raw scores z.
-        y: (n,) labels in {0, 1}.
-
-    Returns:
-        The mean loss over the n examples, a float ≥ 0.
-    """
-    per_example = np.maximum(logits, 0.0) - logits * y + np.log1p(np.exp(-np.abs(logits)))
-    return float(np.mean(per_example))
+# Re-exported so `from neural_ids.models.logreg import sigmoid` keeps working.
+__all__ = ["LogisticRegression", "bce_loss", "sigmoid"]
 
 
 class LogisticRegression:

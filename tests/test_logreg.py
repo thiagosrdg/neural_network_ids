@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from sklearn.metrics import log_loss
 
-from neural_ids.gradcheck import numerical_gradient, relative_error
+from neural_ids.gradcheck import assert_gradients_close, numerical_gradient
 from neural_ids.models.logreg import LogisticRegression, bce_loss, sigmoid
 from neural_ids.utils import set_seed
 
@@ -82,7 +82,8 @@ def test_gradient_check_float64() -> None:
 
     theta = np.append(model.w, model.b)  # (6,) float64
     numeric = numerical_gradient(loss_of, theta)
-    assert relative_error(np.append(dw, db), numeric) < 1e-6
+    # Every entry must match (per-element rule); the max relative error is the summary.
+    assert assert_gradients_close(np.append(dw, db), numeric) < 1e-6
 
 
 def test_update_moves_against_gradient() -> None:

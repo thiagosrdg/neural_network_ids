@@ -121,6 +121,24 @@ precision of a perfect model scored against the noisy labels). Synthetic flow ID
 every run, so the ceiling is computed only when `synthetic.json`'s `csv_sha256` equals the
 arrays' `input_sha256`; otherwise the command says they come from different runs and skips it.
 
+## NumPy layers and backpropagation (T05)
+`nn/` holds the building blocks of the MLP (T06) and the autoencoder (T07):
+- `nn/functional.py`: the only copy of the stable `sigmoid` and logit-based `bce_loss`;
+  `models/logreg.py` imports them from here. `bce_loss` rejects arrays of different shapes.
+- `nn/layers.py`: `Dense` (He initialization, W ~ N(0, 2/fan_in), zero biases), `ReLU`, and
+  `BCEWithLogits`. A layer's `forward` caches what `backward` needs; `backward(grad_out)` stores
+  the parameter gradients and returns the input gradient. The 1/B of the mean loss enters once,
+  in `BCEWithLogits.backward`. Logits (B, 1) are flattened to (B,) after a shape check, so they
+  never broadcast against labels (B,) into a (B, B) array.
+- `nn/model.py`: `MLP(layer_sizes, rng)`: Dense layers with ReLU between them and none after
+  the last one (logits out). `parameters()` returns the model's own arrays, so an optimizer can
+  update them in place; `gradients()` returns them in the same order and must be read again
+  after each `backward`.
+Every backward pass is checked against finite differences in float64 (`tests/test_nn_gradients.py`),
+with all ReLU inputs kept away from the kink at 0. Each entry must satisfy
+|analytic − numeric| <= 1e-8 + 1e-5·|numeric| (`gradcheck.assert_gradients_close`, the
+`np.testing.assert_allclose` rule), so a small wrong entry cannot hide behind large ones. Equations with shapes: `docs/notes/backprop.md`.
+
 ## The networks
 
 ### MLP classifier (supervised)
