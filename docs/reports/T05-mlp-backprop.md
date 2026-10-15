@@ -3,7 +3,7 @@
 - Date: 2026-10-15
 - Status: done
 - Learning mode: guided (chosen by the user for this task)
-- Commit: `feat: add NumPy layers, MLP, and gradient-checked backpropagation`
+- Commit: see `git log` (`feat: add NumPy layers, MLP, and gradient-checked backpropagation`)
 
 ## Summary
 NumPy layers with forward and backward passes (`Dense`, `ReLU`, `BCEWithLogits`) and an `MLP` built

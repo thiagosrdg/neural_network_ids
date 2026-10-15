@@ -161,6 +161,30 @@ with all ReLU inputs kept away from the kink at 0. Each entry must satisfy
   The validation split also picks the MLP's stopping epoch, so its validation numbers are
   slightly optimistic; the test split stays unused until the final comparison.
 
+## The NumPy autoencoder (T07)
+- `nn/losses.py`: `MSELoss`, the mean over all B·d elements (PyTorch `nn.MSELoss()`); backward
+  2·(pred − target)/(B·d), the only division by B·d. Shapes must match exactly (no broadcasting).
+- `nn/autoencoder.py`: `Autoencoder(MLP)` adds a symmetric-size check and `encode` (bottleneck
+  outputs after ReLU). It inherits the MLP's ×0.01 output init, so the first reconstruction is
+  near 0, the mean of every standardized feature.
+- `anomaly.py`: `NormalScaler` (standardization fitted on normal training flows only; columns
+  constant in normal traffic keep scale 1), `reconstruction_error` (mean over features, one
+  value per flow), `threshold_from_normal` (a quantile of normal validation errors), `flag`
+  (error > threshold), and `detection_table` (false-positive rate, detection rate per attack
+  class, and, with the label-noise mask, the noise ceiling and the flagged normal flows that are
+  really attacks).
+- `uv run python -m neural_ids.train_autoencoder_numpy`: "normal" is y_binary == 0 (label noise
+  is kept, as in real captures). No attack label is used before the final test scoring: the
+  scaler, the weights, early stopping, and the threshold all use normal rows only. A second
+  scaler is needed because the T03 preprocessor is fitted on the whole training split, attacks
+  included. `--val-only` stops before `test.npz` is opened and is the only mode used for tuning.
+  Saves `models/ae_numpy.npz` (weights, `input_mean`, `input_scale`, `threshold`, `quantile`,
+  `layer_sizes`, `schema_version`, `input_sha256`; `load_autoencoder` uses `allow_pickle=False`
+  and checks them), `models/ae_numpy.json`, `reports/figures/ae_numpy_loss.png`, and
+  `reports/figures/ae_numpy_errors.png` (error histogram per class, threshold marked).
+- The same normal validation rows pick the stopping epoch and set the threshold, which can make
+  the threshold slightly low; compare the test false-positive rate with the budget.
+
 ## The networks
 
 ### MLP classifier (supervised)

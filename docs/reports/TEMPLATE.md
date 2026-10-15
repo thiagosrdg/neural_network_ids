@@ -3,7 +3,7 @@
 - Date: YYYY-MM-DD
 - Status: done | partial | blocked
 - Learning mode: hands-on | guided | fast
-- Commit: <short hash> | not committed yet
+- Commit: see `git log` (`<commit message>`)
 
 ## Summary
 <2–3 sentences: what exists now that did not exist before.>

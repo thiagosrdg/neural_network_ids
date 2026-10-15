@@ -3,7 +3,7 @@
 - Date: 2026-10-08
 - Status: done
 - Learning mode: guided (chosen by the user for this task)
-- Commit: not committed yet
+- Commit: see `git log` (`feat: add NumPy baselines, metrics, and gradient check`)
 
 ## Summary
 Three NumPy models (majority, perceptron, logistic regression) are trained on train and compared on val with

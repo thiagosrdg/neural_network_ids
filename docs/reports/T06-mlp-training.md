@@ -1,6 +1,6 @@
 # T06 — MLP from scratch, part 2: training loop and debugging · Report
 
-- Date: 2026-10-15 · Status: done · Learning mode: guided (chosen by the user) · Commit: not committed yet
+- Date: 2026-10-15 · Status: done · Learning mode: guided (chosen by the user) · Commit: see `git log` (`feat: add SGD with momentum and NumPy MLP training with early stopping`)
 
 ## Summary
 The NumPy MLP trains with mini-batch SGD with momentum and early stopping on validation loss. It passes both sanity
