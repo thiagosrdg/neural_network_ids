@@ -3,6 +3,12 @@
 For layer_sizes [29, 64, 32, 1]:
     x (B, 29) → Dense → ReLU → (B, 64) → Dense → ReLU → (B, 32) → Dense → logits (B, 1)
 There is no activation after the last layer: the sigmoid lives inside `BCEWithLogits`.
+
+The last Dense layer starts with small weights (He times OUTPUT_INIT_SCALE) and zero biases,
+so the first logits are close to 0, every first prediction is close to 0.5, and the first
+loss is close to ln 2. Measured in T06 on the default synthetic training split, 20 seeds:
+with plain He init the first logits have a standard deviation of about 0.8 within one model
+and the first loss ranges from 0.51 to 1.53; with the 0.01 scale it ranges from 0.686 to 0.698.
 """
 
 from collections.abc import Sequence
@@ -10,6 +16,8 @@ from collections.abc import Sequence
 import numpy as np
 
 from neural_ids.nn.layers import Dense, ReLU
+
+OUTPUT_INIT_SCALE = 0.01  # multiplies the He standard deviation of the last Dense layer
 
 
 class MLP:
@@ -23,8 +31,10 @@ class MLP:
         self.layers: list[Dense | ReLU] = []
         pairs = list(zip(layer_sizes[:-1], layer_sizes[1:], strict=True))
         for i, (n_in, n_out) in enumerate(pairs):
-            self.layers.append(Dense(n_in, n_out, rng))
-            if i < len(pairs) - 1:  # ReLU between layers, never on the logits
+            last = i == len(pairs) - 1
+            scale = OUTPUT_INIT_SCALE if last else 1.0
+            self.layers.append(Dense(n_in, n_out, rng, init_scale=scale))
+            if not last:  # ReLU between layers, never on the logits
                 self.layers.append(ReLU())
 
     def forward(self, x: np.ndarray) -> np.ndarray:

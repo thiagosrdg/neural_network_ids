@@ -125,7 +125,8 @@ arrays' `input_sha256`; otherwise the command says they come from different runs
 `nn/` holds the building blocks of the MLP (T06) and the autoencoder (T07):
 - `nn/functional.py`: the only copy of the stable `sigmoid` and logit-based `bce_loss`;
   `models/logreg.py` imports them from here. `bce_loss` rejects arrays of different shapes.
-- `nn/layers.py`: `Dense` (He initialization, W ~ N(0, 2/fan_in), zero biases), `ReLU`, and
+- `nn/layers.py`: `Dense` (He initialization, W ~ N(0, 2/fan_in) times an optional
+  `init_scale`, zero biases), `ReLU`, and
   `BCEWithLogits`. A layer's `forward` caches what `backward` needs; `backward(grad_out)` stores
   the parameter gradients and returns the input gradient. The 1/B of the mean loss enters once,
   in `BCEWithLogits.backward`. Logits (B, 1) are flattened to (B,) after a shape check, so they
@@ -138,6 +139,27 @@ Every backward pass is checked against finite differences in float64 (`tests/tes
 with all ReLU inputs kept away from the kink at 0. Each entry must satisfy
 |analytic − numeric| <= 1e-8 + 1e-5·|numeric| (`gradcheck.assert_gradients_close`, the
 `np.testing.assert_allclose` rule), so a small wrong entry cannot hide behind large ones. Equations with shapes: `docs/notes/backprop.md`.
+
+## Training the NumPy MLP (T06)
+- Output-layer init: the last Dense layer starts at He × 0.01 (`OUTPUT_INIT_SCALE` in `nn/model.py`) with
+  zero biases, so the first logits are near 0 and the first loss is within 0.01 of ln 2. With
+  plain He init the first loss ranged from 0.51 to 1.53 over 20 seeds (default synthetic data).
+- `nn/optim.py`: `SGD(params, lr, momentum)` in the PyTorch form (v ← μ·v + g; p ← p − lr·v),
+  updating the model's own arrays in place. The training loop passes `model.gradients()`,
+  read again after every `backward`.
+- `uv run python -m neural_ids.train_numpy`: `TrainConfig` (lr 0.05, momentum 0.9, batch 64,
+  up to 100 epochs, hidden (64, 32), seed 42, patience 10). Each epoch reshuffles with a seeded
+  generator. Train loss, validation loss, and validation F1 are measured on the full splits after
+  every epoch. Early stopping on validation loss keeps the best weights (copied, then written
+  back in place). Saves `models/mlp_numpy.npz` (weights plus `layer_sizes`, `schema_version`,
+  `input_sha256`; loaded with `allow_pickle=False` and checked by `load_mlp`), the settings in
+  `models/mlp_numpy.json`, and `reports/figures/mlp_numpy_loss.png` (best epoch marked).
+- `--sanity` runs the two debugging checks: the first loss near ln 2, and overfitting 64 training
+  rows (2000 full-batch steps) to a loss below 0.02.
+- The validation table compares logistic regression (T04 settings), the MLP, a scikit-learn
+  random forest (a reference only: how far a nonlinear model gets), and the label-noise ceiling.
+  The validation split also picks the MLP's stopping epoch, so its validation numbers are
+  slightly optimistic; the test split stays unused until the final comparison.
 
 ## The networks
 

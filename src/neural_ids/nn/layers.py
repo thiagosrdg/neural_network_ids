@@ -19,15 +19,22 @@ class Dense:
     """Fully connected layer: out = x · W + b.
 
     Attributes:
-        W: (in_features, out_features) weights, He-initialized.
+        W: (in_features, out_features) weights, He-initialized (times `init_scale`).
         b: (out_features,) biases, zeros.
         dW, db: gradients of the loss with respect to W and b, set by `backward`.
     """
 
-    def __init__(self, in_features: int, out_features: int, rng: np.random.Generator) -> None:
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        rng: np.random.Generator,
+        init_scale: float = 1.0,
+    ) -> None:
         # He initialization: W ~ N(0, 2 / fan_in). ReLU zeroes about half of its inputs, and
         # the factor 2 makes up for that, so activations keep a similar size layer after layer.
-        std = np.sqrt(2.0 / in_features)
+        # `init_scale` multiplies the standard deviation (the MLP's output layer uses 0.01).
+        std = init_scale * np.sqrt(2.0 / in_features)
         self.W = rng.normal(0.0, std, size=(in_features, out_features))  # (in, out) float64
         self.b = np.zeros(out_features)  # (out,)
         self.dW = np.zeros_like(self.W)
