@@ -333,8 +333,20 @@ def run_sanity(train: Split, config: TrainConfig) -> dict[str, float]:
             "passed": ok1 and ok2}  # fmt: skip
 
 
-def compare_on_val(train: Split, val: Split, mlp: MLP, seed: int) -> dict[str, dict]:
-    """Fit logistic regression and a random forest on train; score all three on val."""
+def compare_on_val(
+    train: Split,
+    val: Split,
+    mlp: MLP | None,
+    seed: int,
+    extra: dict[str, np.ndarray] | None = None,
+) -> dict[str, dict]:
+    """Fit logistic regression and a random forest on train; score them and the MLP on val.
+
+    Args:
+        mlp: the NumPy MLP, or None to leave its row out.
+        extra: more models' validation predictions, (n_val,) 0/1 each, shown after the MLP
+            (T08 adds the PyTorch MLP here).
+    """
     # Same random stream and settings as `train_baselines`, so this row matches T04.
     _, logreg_rng = set_seed(seed).spawn(2)
     logreg = LogisticRegression(train.x.shape[1], lr=0.1, epochs=30, batch_size=64).fit(
@@ -342,11 +354,11 @@ def compare_on_val(train: Split, val: Split, mlp: MLP, seed: int) -> dict[str, d
     )
     forest = RandomForestClassifier(n_estimators=200, random_state=seed, n_jobs=-1)
     forest.fit(train.x, train.y_binary)
-    preds = {
-        "logistic_regression": logreg.predict(val.x),
-        "mlp_numpy": predict(mlp, val.x),
-        "random_forest (ref)": forest.predict(val.x).astype(np.int64),
-    }
+    preds = {"logistic_regression": logreg.predict(val.x)}
+    if mlp is not None:
+        preds["mlp_numpy"] = predict(mlp, val.x)
+    preds.update(extra or {})
+    preds["random_forest (ref)"] = forest.predict(val.x).astype(np.int64)
     return {
         name: {**binary_report(val.y_binary, p), "confusion": confusion_matrix(val.y_binary, p)}
         for name, p in preds.items()

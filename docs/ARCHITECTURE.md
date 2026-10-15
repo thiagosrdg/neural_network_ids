@@ -185,6 +185,33 @@ with all ReLU inputs kept away from the kink at 0. Each entry must satisfy
 - The same normal validation rows pick the stopping epoch and set the threshold, which can make
   the threshold slightly low; compare the test false-positive rate with the budget.
 
+## The PyTorch classifier (T08)
+- PyTorch is the CPU-only build from an explicit `pytorch-cpu` uv index (no CUDA libraries).
+  `set_seed` also seeds torch.
+- `torch_models.py`: `MLPClassifier(n_features, hidden, n_classes, dropout)`: one output logit for
+  binary, K for multi-class; ReLU (and Dropout when dropout > 0) between layers. Same init as the
+  NumPy MLP (He normal, last layer × `OUTPUT_INIT_SCALE`, zero biases), so the first loss is near
+  ln 2 or ln K. `copy_numpy_weights` copies a NumPy MLP into it (`nn.Linear.weight` = `Dense.W`ᵀ).
+- Cross-check (`tests/test_torch_crosscheck.py`, float64): logits (atol 1e-8), autograd gradients
+  against our `backward` for BCE and for softmax cross-entropy (rtol 1e-6), and 5 steps of our
+  `SGD` against `torch.optim.SGD`, momentum 0.9.
+- `train_torch.py`: `FlowDataset` (binary labels (B, 1) float, multi-class (B,) int64), a
+  `DataLoader` with a seeded `torch.Generator` and `num_workers=0`, `train_step`
+  (zero_grad → forward → loss → backward → step), AdamW (lr 1e-3, weight decay 0.01), early
+  stopping on validation loss with the best weights kept as cloned tensors (`state_dict()` shares
+  memory with the model), and `torch.use_deterministic_algorithms(True)`.
+  Optional balanced class weights `n / (K · count)`, from the training split only.
+- `uv run python -m neural_ids.train_torch --target binary|multiclass [--class-weights]`: saves
+  `models/mlp_torch_<target>[_weighted].pt` (the `state_dict` only, loaded with
+  `weights_only=True`) and a `.json` next to it (layer sizes, n_classes, dropout, class names,
+  `schema_version`, `input_sha256`, settings), plus a loss figure. Binary: a table with logistic
+  regression, the NumPy MLP, the PyTorch MLP, a random forest, and the noise ceiling.
+  Multi-class: per-class precision, recall, F1, the recall ceiling per class, macro-F1, and the
+  confusion matrix. T09 turns the `.pt` + `.json` pair into the model bundle.
+- `metrics.py`: `multiclass_confusion`, `per_class_report`, `macro_f1`,
+  `recall_ceiling_per_class` (each flip crosses the normal/attack groups, so a flipped row is
+  always a miss for a perfect model). Derivation of the softmax gradient: `docs/notes/softmax.md`.
+
 ## The networks
 
 ### MLP classifier (supervised)

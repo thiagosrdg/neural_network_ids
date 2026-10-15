@@ -15,8 +15,12 @@ from neural_ids.metrics import (
     confusion_matrix,
     f1,
     label_noise_ceiling,
+    macro_f1,
+    multiclass_confusion,
+    per_class_report,
     precision,
     recall,
+    recall_ceiling_per_class,
 )
 from neural_ids.synthetic import perfect_model_scores
 from neural_ids.utils import set_seed
@@ -103,3 +107,54 @@ def test_label_noise_ceiling_matches_count_formula() -> None:
 def test_no_flips_gives_perfect_ceiling() -> None:
     y = np.array([0, 1, 1, 0])
     assert label_noise_ceiling(y, np.zeros(4, dtype=bool)) == {"recall": 1.0, "precision": 1.0}
+
+
+# --- Multi-class metrics (T08) -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_multiclass_metrics_match_sklearn(seed: int) -> None:
+    """Confusion matrix, per-class precision/recall/F1/support, and macro-F1 match sklearn."""
+    rng = set_seed(seed)
+    k = 4
+    y_true = rng.integers(0, k, 300)  # (300,)
+    y_pred = np.where(rng.random(300) < 0.6, y_true, rng.integers(0, k, 300))  # (300,)
+    np.testing.assert_array_equal(
+        multiclass_confusion(y_true, y_pred, k),
+        skm.confusion_matrix(y_true, y_pred, labels=list(range(k))),
+    )
+    report = per_class_report(y_true, y_pred, k)
+    p, r, f, s = skm.precision_recall_fscore_support(
+        y_true, y_pred, labels=list(range(k)), zero_division=0
+    )
+    np.testing.assert_allclose(report["precision"], p)
+    np.testing.assert_allclose(report["recall"], r)
+    np.testing.assert_allclose(report["f1"], f)
+    np.testing.assert_array_equal(report["support"], s)
+    assert macro_f1(y_true, y_pred, k) == pytest.approx(
+        skm.f1_score(y_true, y_pred, labels=list(range(k)), average="macro", zero_division=0)
+    )
+
+
+def test_class_never_predicted_scores_zero() -> None:
+    """A class that is never predicted has precision 0 (like zero_division=0), not NaN."""
+    y_true = np.array([0, 1, 2, 2])
+    y_pred = np.array([0, 1, 1, 1])  # class 2 never predicted
+    report = per_class_report(y_true, y_pred, 3)
+    assert report["precision"][2] == 0.0
+    assert report["recall"][2] == 0.0
+    assert report["f1"][2] == 0.0
+
+
+def test_multiclass_out_of_range_raises() -> None:
+    with pytest.raises(ValueError):
+        multiclass_confusion(np.array([0, 3]), np.array([0, 1]), 3)
+
+
+def test_recall_ceiling_per_class_by_hand() -> None:
+    """Flipped rows are always wrong for a perfect model: ceiling = unflipped share per class."""
+    y_class = np.array([0, 0, 0, 0, 1, 1, 2])
+    flipped = np.array([False, True, False, False, True, False, False])
+    ceiling = recall_ceiling_per_class(y_class, flipped, 4)
+    np.testing.assert_allclose(ceiling[:3], [0.75, 0.5, 1.0])
+    assert np.isnan(ceiling[3])  # no rows labeled class 3

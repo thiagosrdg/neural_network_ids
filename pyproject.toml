@@ -17,11 +17,13 @@ requires-python = ">=3.13"
 # - pandas: tables (one row per network flow).
 # - matplotlib: plots, such as loss curves saved to reports/figures/.
 # - scikit-learn: only for splitting data and for cross-checking our own code.
+# - torch: PyTorch (tensors, autograd, nn, DataLoader, optimizers), CPU-only build (see below).
 dependencies = [
     "matplotlib>=3.11.2",
     "numpy>=2.5.3",
     "pandas>=3.0.6",
     "scikit-learn>=1.9.1",
+    "torch>=2.14.1",
 ]
 
 [dependency-groups]
@@ -55,3 +57,15 @@ select = ["E", "F", "I", "B", "UP", "NPY"]
 # Where pytest looks for tests, and "-ra" prints a short summary of skipped/failed tests.
 testpaths = ["tests"]
 addopts = "-ra"
+
+# PyTorch, CPU-only build (https://docs.astral.sh/uv/guides/integration/pytorch/).
+# The default Linux wheel pulls in about 2-3 GB of CUDA libraries we do not need: our models
+# are small and train in seconds on a CPU. `explicit = true` means only packages listed in
+# [tool.uv.sources] come from this index; everything else still comes from PyPI.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]

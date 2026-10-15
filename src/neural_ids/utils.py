@@ -19,9 +19,12 @@ from pathlib import Path
 # NumPy is the array library we use for all numeric work. `np` is the usual short name.
 import numpy as np
 
+# PyTorch keeps its own global random generator (weight init, dropout masks).
+import torch
+
 
 def set_seed(seed: int) -> np.random.Generator:
-    """Seed Python's `random` module and return a NumPy random Generator.
+    """Seed Python's `random` module and PyTorch, and return a NumPy random Generator.
 
     A *seed* is the starting value of a pseudo-random number generator (PRNG). A PRNG is a
     deterministic algorithm: the same seed always produces the same sequence of numbers.
@@ -49,7 +52,10 @@ def set_seed(seed: int) -> np.random.Generator:
     # 1. Seed Python's built-in `random` module. This covers any code that uses `random`
     #    (for example `random.shuffle`), so it also becomes reproducible.
     random.seed(seed)
-    # 2. Create a new, independent NumPy Generator from the seed and return it.
+    # 2. Seed PyTorch's global generator (CPU). nn.Linear init and dropout masks draw from it.
+    #    The DataLoader's shuffling gets its own seeded `torch.Generator` (see train_torch.py).
+    torch.manual_seed(seed)
+    # 3. Create a new, independent NumPy Generator from the seed and return it.
     #    `default_rng` uses the PCG64 algorithm, which is fast and statistically strong.
     #    Callers keep this object and pass it to functions that need random numbers.
     return np.random.default_rng(seed)

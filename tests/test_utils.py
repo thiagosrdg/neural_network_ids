@@ -53,3 +53,14 @@ def test_file_sha256_matches_hashlib(tmp_path) -> None:
     assert file_sha256(path) == hashlib.sha256(data).hexdigest()
     path.write_bytes(data + b"!")
     assert file_sha256(path) != hashlib.sha256(data).hexdigest()  # one byte changes the hash
+
+
+def test_set_seed_also_seeds_torch() -> None:
+    """PyTorch's global generator (weight init, dropout) repeats after the same seed."""
+    import torch
+
+    set_seed(7)
+    a = torch.rand(4)
+    set_seed(7)
+    b = torch.rand(4)
+    assert torch.equal(a, b)
